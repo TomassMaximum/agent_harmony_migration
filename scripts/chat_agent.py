@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-
 import argparse
 import os
 import sys
@@ -19,12 +18,35 @@ def main() -> None:
     default_root = config.get("agent.root", ".")
 
     parser = argparse.ArgumentParser(description="Interactive agent session")
-    parser.add_argument("task", nargs="?", default="请先探索当前工程，并准备协助我完成迁移相关工作。")
+    parser.add_argument("task", nargs="?", default="")
     parser.add_argument("--model", default=default_model)
     parser.add_argument("--max-steps", type=int, default=default_max_steps)
     parser.add_argument("--root", default=default_root)
     args = parser.parse_args()
 
+    # 确定根目录路径
+    root_path = os.path.abspath(args.root)
+    task_file = os.path.join(root_path, "task.txt")
+    
+    # 如果task.txt存在，读取内容作为任务
+    if os.path.exists(task_file):
+        with open(task_file, "r", encoding="utf-8") as f:
+            task_content = f.read().strip()
+    else:
+        task_content = ""
+    
+    # 如果task.txt不存在，创建空文件占位
+    if not os.path.exists(task_file):
+        with open(task_file, "w", encoding="utf-8") as f:
+            f.write("")
+    
+    # 如果task_content为空（文件为空或命令行未提供），使用默认任务
+    if not task_content:
+        if args.task:
+            task_content = args.task
+        else:
+            task_content = "请先探索当前工程，并准备协助我完成迁移相关工作。"
+    
     agent = AgentLoop(model=args.model, max_steps=args.max_steps, root=args.root)
 
     runner_thread = None
@@ -81,7 +103,7 @@ def main() -> None:
     print("输入 /state 查看当前 session 状态\n")
 
     try:
-        agent.start_session(args.task)
+        agent.start_session(task_content)
         print("会话已创建。输入 /step 或 /continue 开始。")
     except Exception as e:
         print(f"\n初始化失败：{e}", file=sys.stderr)
