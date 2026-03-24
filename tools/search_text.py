@@ -1,4 +1,7 @@
 import os
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import config
 from typing import List
 
 from .base import BaseTool, ToolResult
@@ -11,17 +14,20 @@ class SearchTextTool(BaseTool):
         "file_extensions(可选，如 ['.py', '.ts', '.ets']), max_results(可选)"
     )
 
+    def __init__(self):
+        self.default_max_results = config.get("tools.search_text.max_results", 30)
+
     def run(self, **kwargs) -> ToolResult:
         root = kwargs.get("root", ".")
         keyword = kwargs.get("keyword")
         file_extensions = kwargs.get("file_extensions")
-        max_results = kwargs.get("max_results", 30)
+        max_results = kwargs.get("max_results", self.default_max_results)
 
         if not isinstance(keyword, str) or not keyword.strip():
             return ToolResult(ok=False, content="参数 keyword 无效")
 
         if not isinstance(max_results, int) or max_results <= 0:
-            max_results = 30
+            max_results = self.default_max_results
 
         ext_filter = None
         if isinstance(file_extensions, list):

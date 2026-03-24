@@ -1,4 +1,8 @@
 import subprocess
+import sys
+import os
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import config
 
 from .base import BaseTool, ToolResult
 
@@ -7,16 +11,19 @@ class RunCommandTool(BaseTool):
     name = "run_command"
     description = "执行 shell 命令。参数: command, cwd(可选), timeout(可选，默认60秒)"
 
+    def __init__(self):
+        self.default_timeout = config.get("tools.run_command.timeout", 60)
+
     def run(self, **kwargs) -> ToolResult:
         command = kwargs.get("command")
         cwd = kwargs.get("cwd", None)
-        timeout = kwargs.get("timeout", 60)
+        timeout = kwargs.get("timeout", self.default_timeout)
 
         if not isinstance(command, str) or not command.strip():
             return ToolResult(ok=False, content="参数 command 无效")
 
         if not isinstance(timeout, int) or timeout <= 0:
-            timeout = 60
+            timeout = self.default_timeout
 
         try:
             completed = subprocess.run(

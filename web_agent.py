@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 
 from flask import Flask, render_template_string, request, jsonify
 from agent.loop import AgentLoop
+import config
 
 app = Flask(__name__)
 
@@ -116,5 +117,8 @@ def chat():
 
 
 if __name__ == '__main__':
-    print('启动迁移助手 Web 版，请访问 http://localhost:5001')
-    app.run(debug=True, host='0.0.0.0', port=5001)
+    host = config.get("web.host", "0.0.0.0")
+    port = config.get("web.port", 5001)
+    debug = config.get("web.debug", True)
+    print(f'启动迁移助手 Web 版，请访问 http://localhost:{port}')
+    app.run(debug=debug, host=host, port=port)

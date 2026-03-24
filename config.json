@@ -1,0 +1,38 @@
+{
+  "agent": {
+    "model": "deepseek-chat",
+    "max_steps": 80,
+    "root": "."
+  },
+  "llm": {
+    "api_key": "",
+    "base_url": "https://api.deepseek.com/chat/completions",
+    "timeout": 120,
+    "temperature": null,
+    "max_tokens": null
+  },
+  "tools": {
+    "run_command": {
+      "timeout": 60
+    },
+    "search_text": {
+      "max_results": 30
+    },
+    "read_file": {
+      "max_chars": 12000
+    }
+  },
+  "web": {
+    "host": "0.0.0.0",
+    "port": 5001,
+    "debug": true
+  },
+  "scripts": {
+    "run_agent": {
+      "default_max_steps": 40
+    },
+    "chat_agent": {
+      "default_max_steps": 80
+    }
+  }
+}

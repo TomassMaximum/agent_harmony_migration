@@ -1,8 +1,12 @@
 import json
 import os
+import sys
 import urllib.error
 import urllib.request
 from typing import Dict, List, Optional
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import config
 
 from .types import ChatRequest, ChatResponse, Message
 
@@ -11,12 +15,13 @@ class DeepSeekLLM:
     def __init__(
         self,
         api_key: Optional[str] = None,
-        base_url: str = "https://api.deepseek.com/chat/completions",
-        timeout: int = 120,
+        base_url: Optional[str] = None,
+        timeout: Optional[int] = None,
     ) -> None:
-        self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
-        self.base_url = base_url
-        self.timeout = timeout
+        # 优先级：参数 > 环境变量 > 配置文件 > 默认值
+        self.api_key = api_key or os.getenv("DEEPSEEK_API_KEY") or config.get("llm.api_key", "")
+        self.base_url = base_url if base_url is not None else config.get("llm.base_url", "https://api.deepseek.com/chat/completions")
+        self.timeout = timeout if timeout is not None else config.get("llm.timeout", 120)
 
         if not self.api_key:
             raise RuntimeError(

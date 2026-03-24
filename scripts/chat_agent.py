@@ -8,16 +8,21 @@ import threading
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import config
 
 from agent.loop import AgentLoop
 
 
 def main() -> None:
+    default_model = config.get("agent.model", "deepseek-chat")
+    default_max_steps = config.get("agent.max_steps", 80)
+    default_root = config.get("agent.root", ".")
+
     parser = argparse.ArgumentParser(description="Interactive agent session")
     parser.add_argument("task", nargs="?", default="请先探索当前工程，并准备协助我完成迁移相关工作。")
-    parser.add_argument("--model", default="deepseek-chat")
-    parser.add_argument("--max-steps", type=int, default=80)
-    parser.add_argument("--root", default=".")
+    parser.add_argument("--model", default=default_model)
+    parser.add_argument("--max-steps", type=int, default=default_max_steps)
+    parser.add_argument("--root", default=default_root)
     args = parser.parse_args()
 
     agent = AgentLoop(model=args.model, max_steps=args.max_steps, root=args.root)

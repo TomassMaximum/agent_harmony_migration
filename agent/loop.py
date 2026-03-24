@@ -9,13 +9,16 @@ from .permissions import PermissionManager
 from .prompts import AGENT_SYSTEM_PROMPT
 from .tool_registry import build_tool_registry, render_tool_descriptions
 from .types import ChatRequest, Message
+import sys
+sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
+import config
 
 
 class AgentLoop:
-    def __init__(self, model: str = "deepseek-chat", max_steps: int = 80, root: str = ".") -> None:
-        self.model = model
-        self.max_steps = max_steps
-        self.root = os.path.abspath(root)
+    def __init__(self, model: str = None, max_steps: int = None, root: str = None) -> None:
+        self.model = model if model is not None else config.get("agent.model", "deepseek-chat")
+        self.max_steps = max_steps if max_steps is not None else config.get("agent.max_steps", 80)
+        self.root = os.path.abspath(root if root is not None else config.get("agent.root", "."))
         self.llm = DeepSeekLLM()
         self.registry = build_tool_registry()
         self.permissions = PermissionManager(self.root)
