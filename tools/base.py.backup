@@ -1,0 +1,17 @@
+from dataclasses import dataclass
+from typing import Any, Dict
+
+
+@dataclass
+class ToolResult:
+    ok: bool
+    content: str
+    meta: Dict[str, Any] | None = None
+
+
+class BaseTool:
+    name: str = ""
+    description: str = ""
+
+    def run(self, **kwargs) -> ToolResult:
+        raise NotImplementedError
