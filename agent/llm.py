@@ -8,7 +8,7 @@ from typing import Dict, List, Optional
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
 
-from .types import ChatRequest, ChatResponse, Message
+from .custom_types import ChatRequest, ChatResponse, Message
 
 
 class DeepSeekLLM:

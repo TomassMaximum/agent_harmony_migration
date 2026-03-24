@@ -1,0 +1,22 @@
+{
+  "chat_id": "12c6acca-9e4c-4c7e-b70c-73bfdaa9db1f",
+  "created_at": "2026-03-24T12:34:38.634632Z",
+  "updated_at": "2026-03-24T13:11:54.743122Z",
+  "metadata": {
+    "description": "测试新chat"
+  },
+  "sessions": [
+    {
+      "session_id": "bfac742c-f815-41c3-801d-c8e9a1ce4b2f",
+      "created_at": "2026-03-24T12:34:38.635264Z",
+      "updated_at": "2026-03-24T12:34:38.635264Z",
+      "summary": ""
+    },
+    {
+      "session_id": "39f1ce4f-864f-468f-adb8-3faf497db3fd",
+      "created_at": "2026-03-24T12:53:39.966077Z",
+      "updated_at": "2026-03-24T13:11:54.743109Z",
+      "summary": ""
+    }
+  ]
+}

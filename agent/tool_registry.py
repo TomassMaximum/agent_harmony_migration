@@ -3,7 +3,9 @@ from typing import Dict
 from tools import (
     GetEnvVarTool,
     ListDirTool,
+    ListChatSessionSummariesTool,
     ReadFileTool,
+    ReadSessionMessagesTool,
     RunCommandTool,
     SearchTextTool,
     WhichCommandTool,
@@ -19,6 +21,8 @@ def build_tool_registry() -> Dict[str, BaseTool]:
         RunCommandTool(),
         WhichCommandTool(),
         GetEnvVarTool(),
+        ListChatSessionSummariesTool(),
+        ReadSessionMessagesTool(),
     ]
     return {tool.name: tool for tool in tools}
 

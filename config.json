@@ -3,7 +3,8 @@
     "model": "deepseek-chat",
     "max_steps": 80,
     "root": ".",
-    "session_storage_path": "./sessions"
+    "session_storage_path": "./sessions",
+    "chat_storage_path": "./chats"
   },
   "llm": {
     "api_key": "",
