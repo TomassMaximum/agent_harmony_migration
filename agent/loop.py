@@ -2,9 +2,11 @@ import json
 import os
 import re
 import threading
+import uuid
 from typing import Any, Dict, List, Optional
 
 from .llm import DeepSeekLLM
+from .memory import SessionMemory
 from .permissions import PermissionManager
 from .prompts import AGENT_SYSTEM_PROMPT
 from .tool_registry import build_tool_registry, render_tool_descriptions
@@ -15,13 +17,18 @@ import config
 
 
 class AgentLoop:
-    def __init__(self, model: str = None, max_steps: int = None, root: str = None) -> None:
+    def __init__(self, model: str = None, max_steps: int = None, root: str = None, session_id: str = None) -> None:
         self.model = model if model is not None else config.get("agent.model", "deepseek-chat")
         self.max_steps = max_steps if max_steps is not None else config.get("agent.max_steps", 80)
         self.root = os.path.abspath(root if root is not None else config.get("agent.root", "."))
         self.llm = DeepSeekLLM()
         self.registry = build_tool_registry()
         self.permissions = PermissionManager(self.root)
+
+        # 会话存储
+        storage_path = config.get("agent.session_storage_path", "./sessions")
+        self.memory = SessionMemory(storage_path)
+        self.session_id = session_id if session_id else str(uuid.uuid4())
 
         self.messages: List[Message] = []
         self.session_started = False
@@ -30,10 +37,26 @@ class AgentLoop:
         self.pause_requested = False
         self.lock = threading.RLock()
 
-    def start_session(self, task: str) -> None:
-        tools_text = render_tool_descriptions(self.registry)
-
+    def start_session(self, task: str, load_existing: bool = True) -> None:
+        """
+        启动新会话或恢复现有会话
+        :param task: 任务描述
+        :param load_existing: 如果为True且session_id已存在，则加载历史消息
+        """
         with self.lock:
+            if load_existing:
+                # 尝试加载现有会话
+                existing_messages = self.memory.load_session(self.session_id)
+                if existing_messages:
+                    self.messages = existing_messages
+                    self.session_started = True
+                    self.finished = False
+                    self.pause_requested = False
+                    print(f"[agent] 已恢复会话: {self.session_id}")
+                    return
+
+            # 新会话
+            tools_text = render_tool_descriptions(self.registry)
             self.messages = [
                 Message(role="system", content=AGENT_SYSTEM_PROMPT),
                 Message(
@@ -49,6 +72,7 @@ class AgentLoop:
             self.session_started = True
             self.finished = False
             self.pause_requested = False
+            print(f"[agent] 新会话已启动: {self.session_id}")
 
     def reset_session(self) -> None:
         with self.lock:
@@ -56,6 +80,32 @@ class AgentLoop:
             self.session_started = False
             self.finished = False
             self.pause_requested = False
+            # 可选：删除存储的会话文件
+            # self.memory.delete_session(self.session_id)
+
+    def save_session(self) -> None:
+        """保存当前会话到存储"""
+        with self.lock:
+            if not self.session_started:
+                return
+            self.memory.save_session(self.session_id, self.messages)
+            print(f"[agent] 会话已保存: {self.session_id}")
+
+    def load_session(self, session_id: str) -> bool:
+        """加载指定会话ID的历史消息"""
+        with self.lock:
+            messages = self.memory.load_session(session_id)
+            if messages:
+                self.session_id = session_id
+                self.messages = messages
+                self.session_started = True
+                self.finished = False
+                self.pause_requested = False
+                print(f"[agent] 已加载会话: {session_id}")
+                return True
+            else:
+                print(f"[agent] 会话不存在: {session_id}")
+                return False
 
     def request_pause(self) -> None:
         with self.lock:
@@ -78,7 +128,10 @@ class AgentLoop:
 
     def send_user_message(self, user_message: str) -> str:
         self.inject_user_message(user_message)
-        return self.step_once()
+        response = self.step_once()
+        # 每次用户消息后自动保存会话
+        self.save_session()
+        return response
 
     def step_once(self) -> str:
         with self.lock:
@@ -109,6 +162,8 @@ class AgentLoop:
 
             with self.lock:
                 self.finished = True
+            # 最终答案后保存会话
+            self.save_session()
 
             lines.append("\n===== FINAL ANSWER =====")
             lines.append(final_answer or "(empty final answer)")
@@ -136,6 +191,8 @@ class AgentLoop:
                     ),
                 )
             )
+        # 工具执行后保存会话
+        self.save_session()
 
         lines.append("\n===== TOOL RESULT =====")
         lines.append(json.dumps(tool_feedback, ensure_ascii=False, indent=2))

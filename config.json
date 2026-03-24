@@ -2,7 +2,8 @@
   "agent": {
     "model": "deepseek-chat",
     "max_steps": 80,
-    "root": "."
+    "root": ".",
+    "session_storage_path": "./sessions"
   },
   "llm": {
     "api_key": "",
