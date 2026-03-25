@@ -397,6 +397,13 @@ class AgentLoop:
                     content=(
                         "Tool execution result:\n"
                         f"{json.dumps(tool_feedback, ensure_ascii=False, indent=2)}\n\n"
+                        "Interpretation rules:\n"
+                        "1. If ok is true, the tool executed successfully.\n"
+                        "2. Only treat permission as blocked when meta.blocked_by_permission is true,\n"
+                        "   or the content explicitly says the user did not grant permission.\n"
+                        "3. Do NOT infer permission problems merely because filenames, paths, or text\n"
+                        "   contain words like 'permission', 'permissions', '权限', or similar.\n"
+                        "4. If ok is true, continue the task based on the actual tool result.\n\n"
                         "Based on this result, decide the next action."
                     ),
                 )
@@ -425,6 +432,13 @@ class AgentLoop:
         tool = self.registry[tool_name]
         tool_result = tool.run(**tool_args)
 
+        print("[tool_feedback]", json.dumps({
+                "tool_name": tool_name,
+                "tool_args": tool_args,
+                "ok": tool_result.ok,
+                "content": tool_result.content[:300] if isinstance(tool_result.content, str) else str(tool_result.content),
+                "meta": tool_result.meta or {},
+            }, ensure_ascii=False))
         return {
             "tool_name": tool_name,
             "tool_args": tool_args,
@@ -434,41 +448,8 @@ class AgentLoop:
         }
 
     def _maybe_request_permission(self, tool_name: str, tool_args: Dict[str, Any]) -> Optional[str]:
-        if tool_name != "run_command":
-            return None
-
-        command = tool_args.get("command", "")
-        cwd = tool_args.get("cwd")
-
-        decision = self.permissions.check_run_command(command=command, cwd=cwd)
-        if decision.allowed:
-            return None
-
-        if not decision.requires_user_approval:
-            return (
-                "命令未被执行，因为它不被允许。\n"
-                f"command: {command}\n"
-                f"cwd: {cwd}\n"
-                f"reason: {decision.reason}"
-            )
-
-        approved = self._ask_user_for_permission(
-            command=command,
-            cwd=cwd,
-            requested_paths=decision.requested_paths,
-            reason=decision.reason,
-        )
-
-        if approved:
-            return None
-
-        return (
-            "命令未被执行，因为用户未授予权限。\n"
-            f"command: {command}\n"
-            f"cwd: {cwd}\n"
-            f"reason: {decision.reason}\n"
-            "Please choose another approach if possible."
-        )
+        # TEMP: disable all permission blocking
+        return None
 
     def _ask_user_for_permission(
         self,
@@ -477,43 +458,8 @@ class AgentLoop:
         requested_paths: List[str],
         reason: str,
     ) -> bool:
-        print("\n===== PERMISSION REQUIRED =====")
-        print("Agent 想执行一个工作区外的潜在修改型命令。")
-        print(f"cwd: {cwd}")
-        print(f"command: {command}")
-        print(f"reason: {reason}")
-
-        if requested_paths:
-            print("涉及路径：")
-            for p in requested_paths:
-                print(f"- {p}")
-
-        print("\n可选操作：")
-        print("y  : 仅本次允许")
-        print("a  : 授权这些路径，后续也允许")
-        print("n  : 拒绝")
-
-        while True:
-            try:
-                answer = input("请输入 y / a / n: ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                print("\n未收到授权输入，按拒绝处理。")
-                return False
-
-            if answer == "y":
-                return True
-
-            if answer == "a":
-                for p in requested_paths:
-                    self.permissions.grant_write_access(p)
-                print("\n已授权以下路径的写操作：")
-                print(self.permissions.describe_allowed_write_roots())
-                return True
-
-            if answer == "n":
-                return False
-
-            print("无效输入，请输入 y / a / n。")
+        # TEMP: always allow
+        return True
 
     def _parse_json(self, text: str) -> Dict[str, Any]:
         text = text.strip()
