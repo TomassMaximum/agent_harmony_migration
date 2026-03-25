@@ -11,8 +11,9 @@ from .memory import SessionMemory
 from .chat_memory import ChatMemory
 from .permissions import PermissionManager
 from .prompts import AGENT_SYSTEM_PROMPT
-from .tool_registry import build_tool_registry, render_tool_descriptions
+from .tool_registry import build_tool_registry, render_tool_descriptions, render_tool_command
 from .custom_types import ChatRequest, Message
+from .events import AgentEvent
 
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -199,10 +200,15 @@ class AgentLoop:
 
     def send_user_message(self, user_message: str) -> str:
         self.inject_user_message(user_message)
-        response = self.step_once()
+        events = self.step_once()
         self.save_session()
-        return response
 
+        final_event = next((e for e in events if e.type == "final"), None)
+        if final_event and final_event.content:
+            return final_event.content
+
+        return "本轮未生成最终答复。"
+        
     def _serialize_messages_for_summary(self, messages: List[Message], max_items: int = 80, max_chars: int = 16000) -> str:
         selected = messages[-max_items:]
         blocks: List[str] = []
@@ -343,13 +349,19 @@ class AgentLoop:
         print(f"[agent] 已更新 session 摘要: {session_id}")
         print(f"[agent] 已更新 chat 摘要: {chat_id}")
 
-    def step_once(self) -> str:
+    def step_once(self) -> List[AgentEvent]:
         with self.lock:
             if not self.session_started:
                 raise RuntimeError("session 尚未开始，请先调用 start_session()")
 
             if self.finished:
-                return "当前 session 已完成。你可以继续补充信息，或者 /reset 开始新任务。"
+                return [
+                    AgentEvent(
+                        type="final",
+                        step=0,
+                        content="当前 session 已完成。你可以继续补充信息，或者 /reset 开始新任务。"
+                    )
+                ]
 
             messages_snapshot = list(self.messages)
 
@@ -359,25 +371,40 @@ class AgentLoop:
 
         action_obj = self._parse_json(raw_text)
         action = action_obj.get("action")
-
-        lines: List[str] = []
-        lines.append("===== AGENT ACTION =====")
-        lines.append(raw_text)
+        thought = (action_obj.get("thought") or "").strip()
 
         with self.lock:
             self.messages.append(Message(role="assistant", content=raw_text))
 
+        step_no = max(1, sum(1 for m in messages_snapshot if m.role == "assistant") + 1)
+        events: List[AgentEvent] = []
+
+        if thought:
+            events.append(
+                AgentEvent(
+                    type="thought",
+                    step=step_no,
+                    content=thought,
+                )
+            )
+
         if action == "final":
             final_answer = action_obj.get("final_answer", "").strip()
+
             with self.lock:
                 self.finished = True
 
             self.save_session()
             self.finalize_session_memory()
 
-            lines.append("\n===== FINAL ANSWER =====")
-            lines.append(final_answer or "(empty final answer)")
-            return "\n".join(lines)
+            events.append(
+                AgentEvent(
+                    type="final",
+                    step=step_no,
+                    content=final_answer or "(empty final answer)",
+                )
+            )
+            return events
 
         if action != "tool":
             raise RuntimeError(f"模型返回了未知 action: {action_obj}")
@@ -388,7 +415,31 @@ class AgentLoop:
         if tool_name not in self.registry:
             raise RuntimeError(f"模型请求了未知工具: {tool_name}")
 
+        command = render_tool_command(tool_name, tool_args)
+
+        events.append(
+            AgentEvent(
+                type="tool_call",
+                step=step_no,
+                tool_name=tool_name,
+                tool_args=tool_args,
+                command=command,
+            )
+        )
+
         tool_feedback = self._execute_tool_or_permission_result(tool_name, tool_args)
+
+        events.append(
+            AgentEvent(
+                type="tool_result",
+                step=step_no,
+                tool_name=tool_name,
+                tool_args=tool_args,
+                command=command,
+                result=tool_feedback,
+                status="success" if tool_feedback.get("ok") else "failed",
+            )
+        )
 
         with self.lock:
             self.messages.append(
@@ -410,11 +461,7 @@ class AgentLoop:
             )
 
         self.save_session()
-
-        lines.append("\n===== TOOL RESULT =====")
-        lines.append(json.dumps(tool_feedback, ensure_ascii=False, indent=2))
-
-        return "\n".join(lines)
+        return events
 
     def _execute_tool_or_permission_result(self, tool_name: str, tool_args: Dict[str, Any]) -> Dict[str, Any]:
         permission_feedback = self._maybe_request_permission(tool_name, tool_args)
