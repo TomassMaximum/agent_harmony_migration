@@ -1,11 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
-OpenAI API adapter for hm_agent.
-Permission-free adapter version for Open WebUI integration.
-"""
 
-import re
 import os
 import sys
 import time
@@ -20,18 +15,19 @@ import config
 from agent.loop import AgentLoop
 from agent.chat_memory import ChatMemory
 
-from flask import Flask, request, jsonify
+from flask import Flask, request, jsonify, Response, stream_with_context
 
 # ---------- Configuration ----------
 CONFIG = config.get
 HOST = CONFIG("web.host", "0.0.0.0")
 PORT = CONFIG("web.port", 5001)
-DEBUG = False  # keep single process for stable debugging
+DEBUG = False
 
 CHAT_STORAGE_PATH = CONFIG("agent.chat_storage_path", "./chats")
 SESSION_STORAGE_PATH = CONFIG("agent.session_storage_path", "./sessions")
 
 ADAPTER_MODEL_NAME = "hm-agent"
+MAX_WEB_STEPS = int(CONFIG("web.max_steps", 12))
 
 WEB_CHAT_INIT_TASK = (
     "你现在处于 Web 聊天模式。"
@@ -39,14 +35,12 @@ WEB_CHAT_INIT_TASK = (
     "只有在用户明确提出需要查看文件、目录、执行命令或分析工程时，才使用工具。"
 )
 
-MAX_WEB_STEPS = int(CONFIG("web.max_steps", 12))
-
 # ---------- State ----------
 # Maps conversation_key to {"chat_id": ..., "session_id": ...}
 _conversation_map: Dict[str, Dict[str, str]] = {}
 
-# ---------- Helpers ----------
 
+# ---------- Helpers ----------
 def now_ts() -> int:
     return int(time.time())
 
@@ -76,8 +70,14 @@ def is_openwebui_meta_request(user_content: str) -> bool:
     return any(marker in text for marker in markers)
 
 
+def normalize_user_text(text: str) -> str:
+    text = (text or "").strip()
+    if text.startswith("> "):
+        text = text[2:].strip()
+    return text
+
+
 def get_last_user_message(messages: list) -> str:
-    """Extract the last user message from the messages list."""
     for msg in reversed(messages):
         if msg.get("role") == "user":
             content = msg.get("content", "")
@@ -86,19 +86,7 @@ def get_last_user_message(messages: list) -> str:
     raise ValueError("No user message found")
 
 
-def normalize_user_text(text: str) -> str:
-    text = (text or "").strip()
-    if text.startswith("> "):
-        text = text[2:].strip()
-    return text
-
-
 def get_first_real_user_message(messages: list) -> str:
-    """
-    Return the first non-meta user message from the full message history.
-    Used to derive a stable fallback conversation key when Open WebUI
-    does not send back our custom X-Conversation-Key header.
-    """
     for msg in messages:
         if msg.get("role") != "user":
             continue
@@ -112,10 +100,6 @@ def get_first_real_user_message(messages: list) -> str:
 
 
 def derive_fallback_conversation_key(messages: list) -> str:
-    """
-    Derive a stable conversation key from the first real user message.
-    Good enough for current single-user local prototype.
-    """
     seed = get_first_real_user_message(messages)
     if not seed:
         new_key = str(uuid.uuid4())
@@ -133,13 +117,6 @@ def derive_fallback_conversation_key(messages: list) -> str:
 
 
 def get_or_create_conversation_key(messages: list) -> Tuple[str, bool]:
-    """
-    Extract conversation key from request, or derive a stable fallback from messages.
-    Priority:
-    1. X-Conversation-Key header
-    2. query parameter conversation_key
-    3. derived key from first real user message in messages
-    """
     header_key = request.headers.get("X-Conversation-Key")
     if header_key:
         sys.stderr.write(f"[get_or_create_conversation_key] found in header: {header_key}\n")
@@ -156,7 +133,6 @@ def get_or_create_conversation_key(messages: list) -> Tuple[str, bool]:
 
 
 def extract_final_answer(response_text: str) -> str:
-    """Extract FINAL ANSWER content if present, otherwise return empty string."""
     final_marker = "===== FINAL ANSWER ====="
     idx = response_text.find(final_marker)
     if idx == -1:
@@ -174,10 +150,6 @@ def contains_debug_sections(response_text: str) -> bool:
 
 
 def finalize_web_response(raw_outputs: List[str]) -> str:
-    """
-    Convert accumulated step outputs into a user-facing assistant message.
-    No permission handling in adapter.
-    """
     joined = "\n\n".join([x for x in raw_outputs if x]).strip()
 
     if not joined:
@@ -191,6 +163,7 @@ def finalize_web_response(raw_outputs: List[str]) -> str:
         return "本轮执行尚未生成最终答复，已在适配层停止。请重试，或换一种更直接的提问方式。"
 
     return joined.strip()
+
 
 def extract_json_block(text: str, marker: str) -> dict:
     idx = text.find(marker)
@@ -295,79 +268,57 @@ def compose_visible_response(final_text: str, trace_events: List[dict]) -> str:
     return final_text
 
 
-def summarize_tool_result(tool_result_text: str, limit: int = 300) -> str:
-    if not tool_result_text:
-        return ""
-    one_line = tool_result_text.replace("\n", " ").strip()
-    if len(one_line) <= limit:
-        return one_line
-    return one_line[:limit] + "..."
+def render_step_markdown(step_index: int, event: dict) -> str:
+    thought = event.get("thought", "").strip()
+    action = event.get("action", "").strip()
+    tool_name = event.get("tool_name", "").strip()
+
+    lines = [f"[step {step_index}]"]
+
+    if thought:
+        lines.append(thought)
+    if action:
+        lines.append(f"action: {action}")
+    if tool_name:
+        lines.append(f"tool: {tool_name}")
+
+    body = "\n".join(lines)
+    return f"```text\n{body}\n```\n\n"
 
 
-def parse_step_output(step_output: str) -> dict:
-    action_data = extract_json_block(step_output, "===== AGENT ACTION =====")
-    tool_result_text = extract_tool_result_block(step_output)
-    final_answer = extract_final_answer(step_output)
+def sse_chunk(chunk_obj: dict) -> str:
+    return f"data: {json.dumps(chunk_obj, ensure_ascii=False)}\n\n"
 
+
+def make_chunk(chunk_id: str, content: str = "", finish_reason=None) -> dict:
     return {
-        "thought": action_data.get("thought", ""),
-        "action": action_data.get("action", ""),
-        "tool_name": action_data.get("tool_name", ""),
-        "tool_args": action_data.get("tool_args", {}),
-        "final_answer": action_data.get("final_answer", "") or final_answer,
-        "tool_result_raw": tool_result_text,
-        "tool_result_summary": summarize_tool_result(tool_result_text),
+        "id": chunk_id,
+        "object": "chat.completion.chunk",
+        "created": now_ts(),
+        "model": ADAPTER_MODEL_NAME,
+        "choices": [
+            {
+                "index": 0,
+                "delta": ({"content": content} if content else {}),
+                "finish_reason": finish_reason,
+            }
+        ],
     }
 
+def split_text_chunks(text: str, max_chars: int = 400) -> List[str]:
+    text = text or ""
+    if len(text) <= max_chars:
+        return [text] if text else []
 
-def render_trace_markdown(trace_events: List[dict]) -> str:
-    if not trace_events:
-        return ""
-
-    parts = ["---", "### 执行过程"]
-
-    for i, event in enumerate(trace_events, start=1):
-        parts.append(f"#### Step {i}")
-
-        thought = event.get("thought", "").strip()
-        action = event.get("action", "").strip()
-        tool_name = event.get("tool_name", "").strip()
-        tool_args = event.get("tool_args", {})
-        tool_result_summary = event.get("tool_result_summary", "").strip()
-        final_answer = event.get("final_answer", "").strip()
-
-        if thought:
-            parts.append(f"- **thought**: {thought}")
-        if action:
-            parts.append(f"- **action**: `{action}`")
-        if tool_name:
-            parts.append(f"- **tool**: `{tool_name}`")
-        if tool_args:
-            parts.append(f"- **args**: `{json.dumps(tool_args, ensure_ascii=False)}`")
-        if tool_result_summary:
-            parts.append(f"- **result**: {tool_result_summary}")
-        if final_answer and action == "final":
-            parts.append(f"- **final**: {final_answer}")
-
-        parts.append("")
-
-    return "\n".join(parts).strip()
-
-
-def compose_visible_response(final_text: str, trace_events: List[dict]) -> str:
-    trace_md = render_trace_markdown(trace_events)
-    final_text = (final_text or "").strip()
-
-    if trace_md:
-        return f"{final_text}\n\n{trace_md}".strip()
-    return final_text
-
+    chunks = []
+    start = 0
+    while start < len(text):
+        end = min(start + max_chars, len(text))
+        chunks.append(text[start:end])
+        start = end
+    return chunks
 
 def ensure_agent(conversation_key: str) -> AgentLoop:
-    """
-    Ensure an AgentLoop session exists for this conversation key.
-    Web mode uses a neutral chat init task.
-    """
     global _conversation_map
 
     if conversation_key in _conversation_map:
@@ -395,7 +346,6 @@ def ensure_agent(conversation_key: str) -> AgentLoop:
     chat_memory = ChatMemory(CHAT_STORAGE_PATH, SESSION_STORAGE_PATH)
     chat_id = chat_memory.create_chat()
     agent = AgentLoop(chat_id=chat_id)
-
     agent.start_session(WEB_CHAT_INIT_TASK, load_existing=False, inject_current_chat_memory=True)
 
     _conversation_map[conversation_key] = {
@@ -449,35 +399,79 @@ def drive_agent_turn(agent: AgentLoop, user_message: str, max_steps: int = MAX_W
     return final_text, trace_events
 
 
+def stream_agent_turn(agent: AgentLoop, user_message: str, max_steps: int = MAX_WEB_STEPS):
+    user_message = normalize_user_text(user_message)
+
+    if hasattr(agent, "finished"):
+        agent.finished = False
+
+    agent.inject_user_message(user_message)
+
+    chunk_id = f"chatcmpl-{uuid.uuid4()}"
+    raw_outputs: List[str] = []
+
+    # 低干扰开头
+    yield sse_chunk(make_chunk(chunk_id, "> 执行过程\n>\n"))
+
+    for step_idx in range(max_steps):
+        sys.stderr.write(f"[stream_agent_turn] step {step_idx + 1}/{max_steps}\n")
+
+        step_output = agent.step_once()
+        if step_output:
+            raw_outputs.append(step_output)
+
+            event = parse_step_output(step_output)
+            step_md = render_step_markdown(step_idx + 1, event)
+
+            # 分片发送，避免 chunk too big
+            for piece in split_text_chunks(step_md, max_chars=350):
+                yield sse_chunk(make_chunk(chunk_id, piece))
+
+        joined = "\n\n".join(raw_outputs)
+        final_answer = extract_final_answer(joined)
+
+        if final_answer:
+            for piece in split_text_chunks("\n\n---\n最终结果：\n\n", max_chars=350):
+                yield sse_chunk(make_chunk(chunk_id, piece))
+            for piece in split_text_chunks(final_answer, max_chars=350):
+                yield sse_chunk(make_chunk(chunk_id, piece))
+            yield sse_chunk(make_chunk(chunk_id, finish_reason="stop"))
+            yield "data: [DONE]\n\n"
+            return
+
+        if getattr(agent, "finished", False):
+            final_text = finalize_web_response(raw_outputs)
+            for piece in split_text_chunks("\n\n---\n最终结果：\n\n", max_chars=350):
+                yield sse_chunk(make_chunk(chunk_id, piece))
+            for piece in split_text_chunks(final_text, max_chars=350):
+                yield sse_chunk(make_chunk(chunk_id, piece))
+            yield sse_chunk(make_chunk(chunk_id, finish_reason="stop"))
+            yield "data: [DONE]\n\n"
+            return
+
+    # 超步数兜底
+    final_text = finalize_web_response(raw_outputs)
+    for piece in split_text_chunks("\n\n---\n最终结果：\n\n", max_chars=350):
+        yield sse_chunk(make_chunk(chunk_id, piece))
+    for piece in split_text_chunks(final_text, max_chars=350):
+        yield sse_chunk(make_chunk(chunk_id, piece))
+    yield sse_chunk(make_chunk(chunk_id, finish_reason="stop"))
+    yield "data: [DONE]\n\n"
+
+
 def handle_openwebui_meta_request(user_content: str) -> str:
-    """
-    Short-circuit Open WebUI background helper requests so they do not pollute hm_agent sessions.
-    """
     text = (user_content or "").strip()
 
     if "Suggest 3-5 relevant follow-up questions" in text:
-        return json.dumps({
-            "follow_ups": [
-                "你能总结一下刚才这段对话吗？",
-                "你能继续记住更多信息吗？",
-                "你能帮我查看当前工程目录吗？"
-            ]
-        }, ensure_ascii=False)
+        return "- 你能总结一下刚才这段对话吗？\n- 你能继续记住更多信息吗？\n- 你能帮我查看当前工程目录吗？"
 
     if "Generate a concise, 3-5 word title" in text:
-        return json.dumps({
-            "title": "💬 对话"
-        }, ensure_ascii=False)
+        return "💬 对话"
 
     if "Generate 1-3 broad tags" in text:
-        return json.dumps({
-            "tags": ["General"],
-            "subtags": ["Chat"]
-        }, ensure_ascii=False)
+        return "General, Chat"
 
-    return json.dumps({
-        "result": "ok"
-    }, ensure_ascii=False)
+    return "ok"
 
 
 # ---------- Flask app ----------
@@ -511,6 +505,8 @@ def create_chat_completion():
     messages = data.get("messages")
     if not messages or not isinstance(messages, list):
         return jsonify({"error": "Missing or invalid 'messages' field"}), 400
+
+    stream = bool(data.get("stream", False))
 
     try:
         user_content = get_last_user_message(messages)
@@ -562,8 +558,22 @@ def create_chat_completion():
 
     try:
         agent = ensure_agent(conversation_key)
+
+        if stream:
+            return Response(
+                stream_with_context(stream_agent_turn(agent, user_content, MAX_WEB_STEPS)),
+                mimetype="text/event-stream",
+                headers={
+                    "Cache-Control": "no-cache",
+                    "X-Accel-Buffering": "no",
+                    "Connection": "keep-alive",
+                    "X-Conversation-Key": conversation_key,
+                },
+            )
+
         final_text, trace_events = drive_agent_turn(agent, user_content, MAX_WEB_STEPS)
         assistant_content = compose_visible_response(final_text, trace_events)
+
     except Exception as e:
         sys.stderr.write(f"[create_chat_completion] agent error: {e}\n")
         return jsonify({"error": f"Agent error: {str(e)}"}), 500
