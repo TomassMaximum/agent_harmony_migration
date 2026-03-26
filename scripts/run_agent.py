@@ -28,12 +28,7 @@ def main() -> None:
         result = agent.run_until_stop(max_steps=args.max_steps)
 
         print("\n===== FINAL ANSWER =====")
-        if result.final_answer:
-            print(result.final_answer)
-        elif result.stop_reason == "max_steps":
-            print("本轮执行达到最大步数，尚未生成最终答复。")
-        else:
-            print(result.error_message or "本轮执行失败。")
+        print(result.user_facing_text())
 
         if result.stop_reason == "final":
             sys.exit(0)

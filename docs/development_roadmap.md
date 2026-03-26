@@ -564,7 +564,7 @@
 2. 再统一停止原因
 3. 最后整理事件协议与对外接口命名
 
-### M1-T2：统一 AgentLoop 执行语义
+### M1-T2：统一 AgentLoop 执行语义 `[已完成]`
 
 任务目标：
 收口 `AgentLoop` 当前“部分方法返回事件对象、部分脚本拼接文本、部分入口自己驱动循环”的混杂状态。
@@ -601,6 +601,38 @@
 - CLI 和 Web 都能复用同一套执行语义
 - 不同入口不再各自维护一套终止判断
 - 事件与最终答复之间的关系明确
+
+当前状态：
+
+- 已完成
+- `run_until_stop()` 已成为统一聚合执行入口
+- `_iter_until_stop()` 已成为统一 step 级执行迭代器
+- Web 流式与非流式路径都已复用统一执行主干
+- 停止原因已扩展为 `final / max_steps / permission_blocked / error`
+- `RunResult.user_facing_text()` 已提供统一用户可见结果文本
+- `send_user_message()` 已收口为基于统一执行语义的单轮入口
+
+验收依据：
+
+- `scripts/run_agent.py`、`scripts/chat_agent.py`、`scripts/openai_adapter.py` 不再各自维护一套核心停止逻辑
+- SSE 流式路径与非流式路径共享同一套停止语义
+- 权限阻塞已经从隐式工具结果升级为核心停止原因
+- 已完成 `py_compile` 校验
+- 已完成 `permission_blocked`、step callback、迭代器返回等 smoke 验证
+
+下一步工作：
+
+1. 进入 `M1-T3`
+   - 明确三个入口的职责边界
+   - 识别还能进一步抽出的共享驱动逻辑
+
+2. 再做 `M1-T4`
+   - 统一事件协议与 trace 渲染
+   - 继续减少 `openai_adapter.py` 内部的事件解释代码
+
+3. 最后补 `M1-T5`
+   - 将目前的 smoke 校验转为正式测试
+   - 给 `run_until_stop()`、`_iter_until_stop()`、停止原因和 CLI 输出加回归保护
 
 ### M1-T3：梳理三类入口职责边界
 

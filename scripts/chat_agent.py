@@ -80,7 +80,11 @@ def run_agent_until_stop(agent: AgentLoop, max_steps: int) -> None:
         print("\n[system] 已达到本轮最大自动步数。", flush=True)
         return
 
-    print(f"\n[system] 自动执行失败：{result.error_message or 'unknown error'}", file=sys.stderr, flush=True)
+    if result.stop_reason == "permission_blocked":
+        print(f"\n[system] 权限阻塞：{result.user_facing_text()}", file=sys.stderr, flush=True)
+        return
+
+    print(f"\n[system] 自动执行失败：{result.user_facing_text()}", file=sys.stderr, flush=True)
 
 
 def choose_chat(chat_memory: ChatMemory) -> Optional[str]:

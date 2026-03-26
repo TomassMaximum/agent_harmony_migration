@@ -555,10 +555,14 @@ def drive_agent_turn(agent: AgentLoop, user_message: str, max_steps: int = MAX_W
 
     if result.stop_reason == "max_steps":
         sys.stderr.write("[drive_agent_turn] stop: max steps reached\n")
-        return "本轮执行尚未生成最终答复，已在适配层停止。请重试，或换一种更直接的提问方式。", grouped_trace
+        return result.user_facing_text(), grouped_trace
+
+    if result.stop_reason == "permission_blocked":
+        sys.stderr.write("[drive_agent_turn] stop: permission blocked\n")
+        return result.user_facing_text(), grouped_trace
 
     sys.stderr.write(f"[drive_agent_turn] stop: error={result.error_message}\n")
-    return f"本轮执行失败：{result.error_message or 'unknown error'}", grouped_trace
+    return result.user_facing_text(), grouped_trace
 
 
 def stream_agent_turn(agent: AgentLoop, user_message: str, max_steps: int = MAX_WEB_STEPS):
@@ -577,50 +581,34 @@ def stream_agent_turn(agent: AgentLoop, user_message: str, max_steps: int = MAX_
 
         rendered_steps = 0
 
-        for _ in range(max_steps):
+        runner = agent._iter_until_stop(max_steps=max_steps)
+        result = None
+
+        while True:
             try:
-                step_events = agent.step_once()
-            except Exception as e:
-                err_text = f"执行中断：{str(e)}"
-                yield sse_chunk(make_chunk(chunk_id, f"\n\n---\n最终结果：\n\n{err_text}"))
-                yield sse_chunk(make_chunk(chunk_id, finish_reason="stop"))
-                yield "data: [DONE]\n\n"
-                return
+                step_events = next(runner)
+            except StopIteration as stop:
+                result = stop.value
+                break
 
             if step_events:
                 all_events.extend(step_events)
 
-                grouped_steps = group_events_by_step(all_events)
+            grouped_steps = group_events_by_step(all_events)
 
-                while rendered_steps < len(grouped_steps):
-                    rendered_steps += 1
-                    step_group = grouped_steps[rendered_steps - 1]
-                    step_md = render_step_markdown(rendered_steps, step_group)
+            while rendered_steps < len(grouped_steps):
+                rendered_steps += 1
+                step_group = grouped_steps[rendered_steps - 1]
+                step_md = render_step_markdown(rendered_steps, step_group)
 
-                    for piece in split_text_chunks(step_md, max_chars=350):
-                        yield sse_chunk(make_chunk(chunk_id, piece))
-
-                final_text = extract_final_text_from_events(step_events)
-                if final_text:
-                    for piece in split_text_chunks("\n\n---\n最终结果：\n\n", max_chars=350):
-                        yield sse_chunk(make_chunk(chunk_id, piece))
-                    for piece in split_text_chunks(final_text, max_chars=350):
-                        yield sse_chunk(make_chunk(chunk_id, piece))
-                    yield sse_chunk(make_chunk(chunk_id, finish_reason="stop"))
-                    yield "data: [DONE]\n\n"
-                    return
-
-            if getattr(agent, "finished", False):
-                final_text = extract_final_text_from_events(all_events) or "本轮执行结束。"
-                for piece in split_text_chunks("\n\n---\n最终结果：\n\n", max_chars=350):
+                for piece in split_text_chunks(step_md, max_chars=350):
                     yield sse_chunk(make_chunk(chunk_id, piece))
-                for piece in split_text_chunks(final_text, max_chars=350):
-                    yield sse_chunk(make_chunk(chunk_id, piece))
-                yield sse_chunk(make_chunk(chunk_id, finish_reason="stop"))
-                yield "data: [DONE]\n\n"
-                return
 
-        final_text = extract_final_text_from_events(all_events) or "本轮执行尚未生成最终答复，已在适配层停止。请重试，或换一种更直接的提问方式。"
+        if result is None:
+            final_text = "本轮执行失败。"
+        else:
+            final_text = result.user_facing_text()
+
         for piece in split_text_chunks("\n\n---\n最终结果：\n\n", max_chars=350):
             yield sse_chunk(make_chunk(chunk_id, piece))
         for piece in split_text_chunks(final_text, max_chars=350):

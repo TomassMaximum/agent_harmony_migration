@@ -4,7 +4,7 @@ import re
 import threading
 import uuid
 from datetime import datetime
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, Generator, List, Optional
 
 from .llm import DeepSeekLLM
 from .memory import SessionMemory
@@ -201,11 +201,7 @@ class AgentLoop:
 
         if result.stop_reason == "final" and result.final_answer:
             return result.final_answer
-
-        if result.stop_reason == "error":
-            return f"本轮执行失败：{result.error_message or 'unknown error'}"
-
-        return "本轮未生成最终答复。"
+        return result.user_facing_text()
 
     def _extract_final_answer(self, events: List[AgentEvent]) -> str:
         for event in reversed(events):
@@ -213,11 +209,29 @@ class AgentLoop:
                 return event.content.strip()
         return ""
 
-    def run_until_stop(
+    def _extract_permission_blocked_message(self, events: List[AgentEvent]) -> str:
+        for event in reversed(events):
+            if event.type != "tool_result" or not isinstance(event.result, dict):
+                continue
+
+            meta = event.result.get("meta") or {}
+            if not isinstance(meta, dict):
+                continue
+
+            if not meta.get("blocked_by_permission"):
+                continue
+
+            content = event.result.get("content", "")
+            if isinstance(content, str) and content.strip():
+                return content.strip()
+            return "本轮执行因权限限制而停止。"
+
+        return ""
+
+    def _iter_until_stop(
         self,
         max_steps: Optional[int] = None,
-        on_step: Optional[Callable[[List[AgentEvent]], None]] = None,
-    ) -> RunResult:
+    ) -> Generator[List[AgentEvent], None, RunResult]:
         with self.lock:
             if not self.session_started:
                 raise RuntimeError("session 尚未开始，请先调用 start_session()")
@@ -243,8 +257,7 @@ class AgentLoop:
                     content=str(e),
                 )
                 all_events.append(error_event)
-                if on_step:
-                    on_step([error_event])
+                yield [error_event]
 
                 return RunResult(
                     final_answer=self._extract_final_answer(all_events),
@@ -258,10 +271,21 @@ class AgentLoop:
 
             if step_events:
                 all_events.extend(step_events)
-                if on_step:
-                    on_step(step_events)
+                yield step_events
 
             step_count += 1
+
+            permission_message = self._extract_permission_blocked_message(step_events)
+            if permission_message:
+                return RunResult(
+                    final_answer=self._extract_final_answer(all_events),
+                    stop_reason="permission_blocked",
+                    step_count=step_count,
+                    events=all_events,
+                    chat_id=self.chat_id,
+                    session_id=self.session_id,
+                    error_message=permission_message,
+                )
 
             final_answer = self._extract_final_answer(step_events)
             if final_answer:
@@ -283,6 +307,20 @@ class AgentLoop:
             chat_id=self.chat_id,
             session_id=self.session_id,
         )
+
+    def run_until_stop(
+        self,
+        max_steps: Optional[int] = None,
+        on_step: Optional[Callable[[List[AgentEvent]], None]] = None,
+    ) -> RunResult:
+        runner = self._iter_until_stop(max_steps=max_steps)
+        while True:
+            try:
+                step_events = next(runner)
+                if on_step:
+                    on_step(step_events)
+            except StopIteration as stop:
+                return stop.value
         
     def _serialize_messages_for_summary(self, messages: List[Message], max_items: int = 80, max_chars: int = 16000) -> str:
         selected = messages[-max_items:]

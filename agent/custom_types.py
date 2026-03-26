@@ -30,7 +30,7 @@ class ChatResponse:
     finish_reason: Optional[str] = None
 
 
-StopReason = Literal["final", "max_steps", "error"]
+StopReason = Literal["final", "max_steps", "permission_blocked", "error"]
 
 
 @dataclass
@@ -42,3 +42,12 @@ class RunResult:
     chat_id: str = ""
     session_id: str = ""
     error_message: str = ""
+
+    def user_facing_text(self) -> str:
+        if self.stop_reason == "final" and self.final_answer:
+            return self.final_answer
+        if self.stop_reason == "max_steps":
+            return "本轮执行尚未生成最终答复，已达到最大步数。"
+        if self.stop_reason == "permission_blocked":
+            return self.error_message or "本轮执行因权限限制而停止。"
+        return self.error_message or "本轮执行失败。"
