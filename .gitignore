@@ -36,5 +36,10 @@ env/
 # Logs
 *.log
 
+# Local runtime data
+chats/
+sessions/
+task.txt
+
 # Permissions file
 .hm_agent_permissions.json
