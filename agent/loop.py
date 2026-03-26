@@ -10,9 +10,19 @@ from .llm import DeepSeekLLM
 from .memory import SessionMemory
 from .chat_memory import ChatMemory
 from .permissions import PermissionManager
-from .prompts import AGENT_SYSTEM_PROMPT
+from .prompts import (
+    AGENT_SYSTEM_PROMPT,
+    CHAT_SUMMARY_SYSTEM_PROMPT,
+    SESSION_SUMMARY_SYSTEM_PROMPT,
+    build_chat_summary_prompt,
+    build_current_chat_memory_block,
+    build_session_start_message,
+    build_session_summary_prompt,
+    build_tool_feedback_message,
+)
 from .tool_registry import build_tool_registry, render_tool_descriptions, render_tool_command
 from .custom_types import ChatRequest, Message, RunResult
+from .errors import AgentExecutionError, InvalidModelOutputError, LLMExecutionError, ToolExecutionError
 from .events import AgentEvent
 
 import sys
@@ -66,34 +76,7 @@ class AgentLoop:
 
         session_ids = meta.get("session_ids", [])
         session_summaries = self.memory.list_session_summaries(session_ids)
-
-        if not meta.get("summary") and not session_summaries:
-            return ""
-
-        lines: List[str] = []
-        lines.append("以下是当前恢复的历史 chat 记忆。")
-        lines.append(f"Current chat id: {self.chat_id}")
-        lines.append(f"Chat title: {meta.get('title', '')}")
-        lines.append(f"Chat summary: {meta.get('summary', '')}")
-        lines.append("")
-        lines.append("该 chat 下的 session 摘要列表：")
-
-        for idx, item in enumerate(session_summaries, start=1):
-            lines.append(
-                f"{idx}. session_id={item.get('session_id', '')}\n"
-                f"   title={item.get('title', '')}\n"
-                f"   summary={item.get('summary', '')}"
-            )
-
-        lines.append("")
-        lines.append(
-            "如果你需要某个历史 session 的细节，可以使用：\n"
-            "- list_chat_session_summaries(chat_id)\n"
-            "- read_session_messages(session_id)\n"
-            "来按需查看历史原始消息。"
-        )
-
-        return "\n".join(lines)
+        return build_current_chat_memory_block(self.chat_id, meta, session_summaries)
 
     def start_session(
         self,
@@ -131,13 +114,12 @@ class AgentLoop:
             self.messages.append(
                 Message(
                     role="user",
-                    content=(
-                        f"Workspace root:\n{self.root}\n\n"
-                        f"Current chat id:\n{self.chat_id}\n\n"
-                        f"Current session id:\n{self.session_id}\n\n"
-                        f"Available tools:\n{tools_text}\n\n"
-                        f"Initial task:\n{task}\n\n"
-                        "Please explore step by step and help the user complete the task."
+                    content=build_session_start_message(
+                        root=self.root,
+                        chat_id=self.chat_id,
+                        session_id=self.session_id,
+                        tools_text=tools_text,
+                        task=task,
                     ),
                 ),
             )
@@ -161,6 +143,12 @@ class AgentLoop:
                 return
             self.memory.save_session(self.session_id, self.messages)
             self.chat_memory.add_session_to_chat(self.chat_id, self.session_id)
+
+    def _save_session_best_effort(self) -> None:
+        try:
+            self.save_session()
+        except Exception:
+            pass
 
     def load_session(self, session_id: str) -> bool:
         with self.lock:
@@ -249,11 +237,16 @@ class AgentLoop:
             try:
                 step_events = self.step_once()
             except Exception as e:
-                self.save_session()
+                stop_reason = "error"
+                if isinstance(e, AgentExecutionError):
+                    stop_reason = e.stop_reason
+                failed_step_count = max(1, step_count + 1)
+
+                self._save_session_best_effort()
 
                 error_event = AgentEvent(
                     type="error",
-                    step=max(1, step_count + 1),
+                    step=failed_step_count,
                     content=str(e),
                 )
                 all_events.append(error_event)
@@ -261,8 +254,8 @@ class AgentLoop:
 
                 return RunResult(
                     final_answer=self._extract_final_answer(all_events),
-                    stop_reason="error",
-                    step_count=step_count,
+                    stop_reason=stop_reason,
+                    step_count=failed_step_count,
                     events=all_events,
                     chat_id=self.chat_id,
                     session_id=self.session_id,
@@ -298,7 +291,7 @@ class AgentLoop:
                     session_id=self.session_id,
                 )
 
-        self.save_session()
+        self._save_session_best_effort()
         return RunResult(
             final_answer=self._extract_final_answer(all_events),
             stop_reason="max_steps",
@@ -338,27 +331,14 @@ class AgentLoop:
 
     def _build_session_summary(self, messages: List[Message]) -> Dict[str, Any]:
         raw_text = self._serialize_messages_for_summary(messages)
-        prompt = (
-            "请把下面这个 session 的对话压缩成结构化摘要。\n\n"
-            "输出 JSON：\n"
-            "{\n"
-            '  "title": "...",\n'
-            '  "summary": "...",\n'
-            '  "key_points": ["...", "..."]\n'
-            "}\n\n"
-            "要求：\n"
-            "1. 重点保留已完成的工作、关键决策、当前状态、未完成事项。\n"
-            "2. 删除寒暄和重复内容。\n"
-            "3. title 要具体。\n\n"
-            f"原始内容如下：\n{raw_text}"
-        )
+        prompt = build_session_summary_prompt(raw_text)
 
         try:
             resp = self.llm.chat(
                 ChatRequest(
                     model=self.model,
                     messages=[
-                        Message(role="system", content="你是一个负责压缩工程 session 记忆的助手。"),
+                        Message(role="system", content=SESSION_SUMMARY_SYSTEM_PROMPT),
                         Message(role="user", content=prompt),
                     ],
                 )
@@ -384,38 +364,14 @@ class AgentLoop:
 
     def _build_chat_summary(self, session_summaries: List[Dict[str, Any]]) -> Dict[str, Any]:
         chat_meta = self.chat_memory.load_chat_meta(self.chat_id) or {}
-
-        summary_blocks: List[str] = []
-        for idx, item in enumerate(session_summaries, start=1):
-            summary_blocks.append(
-                f"{idx}. session_id={item.get('session_id', '')}\n"
-                f"title={item.get('title', '')}\n"
-                f"summary={item.get('summary', '')}"
-            )
-
-        prompt = (
-            "请根据以下多个 session 摘要，更新这个 chat 的整体标题和摘要。\n\n"
-            "输出 JSON：\n"
-            "{\n"
-            '  "title": "...",\n'
-            '  "summary": "..."\n'
-            "}\n\n"
-            "要求：\n"
-            "1. title 概括整个 chat 的长期主题。\n"
-            "2. summary 概括整体进展，而不是单次 session。\n"
-            "3. 如果已有标题/摘要合理，请延续其方向更新。\n\n"
-            f"已有 chat 标题：{chat_meta.get('title', '')}\n"
-            f"已有 chat 摘要：{chat_meta.get('summary', '')}\n\n"
-            "各 session 摘要如下：\n"
-            + "\n\n".join(summary_blocks)
-        )
+        prompt = build_chat_summary_prompt(chat_meta, session_summaries)
 
         try:
             resp = self.llm.chat(
                 ChatRequest(
                     model=self.model,
                     messages=[
-                        Message(role="system", content="你是一个负责维护 chat 长期记忆摘要的助手。"),
+                        Message(role="system", content=CHAT_SUMMARY_SYSTEM_PROMPT),
                         Message(role="user", content=prompt),
                     ],
                 )
@@ -473,10 +429,18 @@ class AgentLoop:
 
             messages_snapshot = list(self.messages)
 
-        response = self.llm.chat(ChatRequest(messages=messages_snapshot, model=self.model))
+        try:
+            response = self.llm.chat(ChatRequest(messages=messages_snapshot, model=self.model))
+        except Exception as e:
+            raise LLMExecutionError(f"模型请求失败：{e}") from e
+
         raw_text = response.content.strip()
 
-        action_obj = self._parse_json(raw_text)
+        try:
+            action_obj = self._parse_json(raw_text)
+        except Exception as e:
+            raise InvalidModelOutputError(str(e)) from e
+
         action = action_obj.get("action")
         thought = (action_obj.get("thought") or "").strip()
 
@@ -514,13 +478,13 @@ class AgentLoop:
             return events
 
         if action != "tool":
-            raise RuntimeError(f"模型返回了未知 action: {action_obj}")
+            raise InvalidModelOutputError(f"模型返回了未知 action: {action_obj}")
 
         tool_name = action_obj.get("tool_name", "")
         tool_args = action_obj.get("tool_args", {})
 
         if tool_name not in self.registry:
-            raise RuntimeError(f"模型请求了未知工具: {tool_name}")
+            raise InvalidModelOutputError(f"模型请求了未知工具: {tool_name}")
 
         command = render_tool_command(tool_name, tool_args)
 
@@ -552,17 +516,8 @@ class AgentLoop:
             self.messages.append(
                 Message(
                     role="user",
-                    content=(
-                        "Tool execution result:\n"
-                        f"{json.dumps(tool_feedback, ensure_ascii=False, indent=2)}\n\n"
-                        "Interpretation rules:\n"
-                        "1. If ok is true, the tool executed successfully.\n"
-                        "2. Only treat permission as blocked when meta.blocked_by_permission is true,\n"
-                        "   or the content explicitly says the user did not grant permission.\n"
-                        "3. Do NOT infer permission problems merely because filenames, paths, or text\n"
-                        "   contain words like 'permission', 'permissions', '权限', or similar.\n"
-                        "4. If ok is true, continue the task based on the actual tool result.\n\n"
-                        "Based on this result, decide the next action."
+                    content=build_tool_feedback_message(
+                        json.dumps(tool_feedback, ensure_ascii=False, indent=2)
                     ),
                 )
             )
@@ -584,7 +539,13 @@ class AgentLoop:
             }
 
         tool = self.registry[tool_name]
-        tool_result = tool.run(**tool_args)
+        try:
+            tool_result = tool.run(**tool_args)
+        except Exception as e:
+            raise ToolExecutionError(f"工具 {tool_name} 执行异常：{e}") from e
+
+        if not hasattr(tool_result, "ok") or not hasattr(tool_result, "content"):
+            raise ToolExecutionError(f"工具 {tool_name} 返回了非法结果对象。")
 
         return {
             "tool_name": tool_name,

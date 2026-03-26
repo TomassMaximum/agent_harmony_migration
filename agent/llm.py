@@ -3,12 +3,12 @@ import os
 import sys
 import urllib.error
 import urllib.request
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
 
-from .custom_types import ChatRequest, ChatResponse, Message
+from .custom_types import ChatRequest, ChatResponse
 
 
 class DeepSeekLLM:
@@ -33,21 +33,6 @@ class DeepSeekLLM:
         payload = self._build_payload(req)
         raw = self._post_json(payload)
         return self._parse_response(raw)
-
-    def simple_chat(
-        self,
-        user_message: str,
-        system_message: str = "You are a helpful assistant.",
-        model: str = "deepseek-chat",
-    ) -> ChatResponse:
-        req = ChatRequest(
-            model=model,
-            messages=[
-                Message(role="system", content=system_message),
-                Message(role="user", content=user_message),
-            ],
-        )
-        return self.chat(req)
 
     def _build_payload(self, req: ChatRequest) -> Dict:
         payload: Dict = {

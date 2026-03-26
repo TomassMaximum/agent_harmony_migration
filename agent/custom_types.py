@@ -30,7 +30,15 @@ class ChatResponse:
     finish_reason: Optional[str] = None
 
 
-StopReason = Literal["final", "max_steps", "permission_blocked", "error"]
+StopReason = Literal[
+    "final",
+    "max_steps",
+    "permission_blocked",
+    "tool_error",
+    "llm_error",
+    "invalid_model_output",
+    "error",
+]
 
 
 @dataclass
@@ -50,4 +58,10 @@ class RunResult:
             return "本轮执行尚未生成最终答复，已达到最大步数。"
         if self.stop_reason == "permission_blocked":
             return self.error_message or "本轮执行因权限限制而停止。"
+        if self.stop_reason == "tool_error":
+            return self.error_message or "本轮执行因工具异常而停止。"
+        if self.stop_reason == "llm_error":
+            return self.error_message or "本轮执行因模型请求失败而停止。"
+        if self.stop_reason == "invalid_model_output":
+            return self.error_message or "本轮执行因模型输出不符合协议而停止。"
         return self.error_message or "本轮执行失败。"

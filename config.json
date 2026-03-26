@@ -30,9 +30,6 @@
     "debug": true
   },
   "scripts": {
-    "run_agent": {
-      "default_max_steps": 400
-    },
     "chat_agent": {
       "default_max_steps": 800
     }

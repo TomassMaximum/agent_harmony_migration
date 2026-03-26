@@ -19,8 +19,18 @@ from agent.events import AgentEvent
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import config
-from agent.loop import AgentLoop
 from agent.chat_memory import ChatMemory
+from agent.loop import AgentLoop
+from agent.prompts import WEB_CHAT_INIT_TASK
+from entry_common import (
+    build_agent,
+    compose_web_response,
+    group_events_by_step,
+    render_web_step_markdown,
+    render_web_trace_payload,
+    run_entry_turn,
+    start_new_session,
+)
 
 from flask import Flask, request, jsonify, Response, stream_with_context
 
@@ -35,12 +45,6 @@ SESSION_STORAGE_PATH = CONFIG("agent.session_storage_path", "./sessions")
 
 ADAPTER_MODEL_NAME = "hm-agent"
 MAX_WEB_STEPS = int(CONFIG("web.max_steps", 12))
-
-WEB_CHAT_INIT_TASK = (
-    "你现在处于 Web 聊天模式。"
-    "直接响应用户当前消息，不要默认探索工程，不要主动执行工具。"
-    "只有在用户明确提出需要查看文件、目录、执行命令或分析工程时，才使用工具。"
-)
 
 # ---------- State ----------
 # Maps conversation_key to {"chat_id": ..., "session_id": ...}
@@ -139,333 +143,6 @@ def get_or_create_conversation_key(messages: list) -> Tuple[str, bool]:
     return derived, True
 
 
-def extract_final_answer(response_text: str) -> str:
-    final_marker = "===== FINAL ANSWER ====="
-    idx = response_text.find(final_marker)
-    if idx == -1:
-        return ""
-    return response_text[idx + len(final_marker):].strip()
-
-
-def contains_debug_sections(response_text: str) -> bool:
-    text = response_text or ""
-    return (
-        "===== AGENT ACTION =====" in text
-        or "===== TOOL RESULT =====" in text
-        or "===== FINAL ANSWER =====" in text
-    )
-
-
-def finalize_web_response(raw_outputs: List[str]) -> str:
-    joined = "\n\n".join([x for x in raw_outputs if x]).strip()
-
-    if not joined:
-        return "本轮未生成可用回复。"
-
-    final_answer = extract_final_answer(joined)
-    if final_answer:
-        return final_answer
-
-    if contains_debug_sections(joined):
-        return "本轮执行尚未生成最终答复，已在适配层停止。请重试，或换一种更直接的提问方式。"
-
-    return joined.strip()
-
-
-def extract_json_block(text: str, marker: str) -> dict:
-    idx = text.find(marker)
-    if idx == -1:
-        return {}
-
-    tail = text[idx + len(marker):].strip()
-    start = tail.find("{")
-    if start == -1:
-        return {}
-
-    brace_count = 0
-    end = -1
-    for i, ch in enumerate(tail[start:]):
-        if ch == "{":
-            brace_count += 1
-        elif ch == "}":
-            brace_count -= 1
-            if brace_count == 0:
-                end = start + i + 1
-                break
-
-    if end == -1:
-        return {}
-
-    json_str = tail[start:end]
-    try:
-        return json.loads(json_str)
-    except Exception:
-        return {}
-
-
-def extract_tool_result_block(text: str) -> str:
-    marker = "===== TOOL RESULT ====="
-    idx = text.find(marker)
-    if idx == -1:
-        return ""
-
-    tail = text[idx + len(marker):].strip()
-    final_idx = tail.find("===== FINAL ANSWER =====")
-    if final_idx != -1:
-        tail = tail[:final_idx].strip()
-
-    return tail.strip()
-
-
-def summarize_tool_result(tool_result_text: str, limit: int = 240) -> str:
-    if not tool_result_text:
-        return ""
-    one_line = tool_result_text.replace("\n", " ").strip()
-    return one_line if len(one_line) <= limit else one_line[:limit] + "..."
-
-
-def parse_step_output(step_output: str) -> dict:
-    action_data = extract_json_block(step_output, "===== AGENT ACTION =====")
-    tool_result_text = extract_tool_result_block(step_output)
-    final_answer = extract_final_answer(step_output)
-
-    event = {
-        "thought": action_data.get("thought", ""),
-        "action": action_data.get("action", ""),
-        "tool_name": action_data.get("tool_name", ""),
-        "tool_args": action_data.get("tool_args", {}),
-        "final_answer": action_data.get("final_answer", "") or final_answer,
-        "tool_result_summary": summarize_tool_result(tool_result_text),
-    }
-
-    event["command"] = infer_command_from_event(event)
-    return event
-
-
-def infer_command_from_event(event: dict) -> str:
-    tool_name = (event.get("tool_name") or "").strip()
-    tool_args = event.get("tool_args") or {}
-
-    if not tool_name:
-        return ""
-
-    if tool_name == "run_command":
-        return str(tool_args.get("command", "")).strip()
-
-    if tool_name == "list_dir":
-        path = str(tool_args.get("path", ".")).strip()
-        return f"ls {path}"
-
-    if tool_name == "read_file":
-        path = str(tool_args.get("path", "")).strip()
-        return f"cat {path}" if path else ""
-
-    if tool_name == "search_text":
-        keyword = str(tool_args.get("keyword", "")).strip()
-        path = str(tool_args.get("path", ".")).strip()
-        if keyword:
-            return f'grep -R "{keyword}" {path}'
-        return f"grep -R <text> {path}"
-
-    if tool_name == "which_command":
-        command_name = str(tool_args.get("command_name", "")).strip()
-        return f"which {command_name}" if command_name else "which <command>"
-
-    if tool_name == "get_env_var":
-        name = str(tool_args.get("name", "")).strip()
-        return f"echo ${name}" if name else "printenv"
-
-    if tool_name == "read_session_messages":
-        session_id = str(tool_args.get("session_id", "")).strip()
-        return f"read_session_messages {session_id}".strip()
-
-    if tool_name == "list_chat_session_summaries":
-        chat_id = str(tool_args.get("chat_id", "")).strip()
-        return f"list_chat_session_summaries {chat_id}".strip()
-
-    # 其他工具的兜底
-    return tool_name
-
-
-def render_trace_markdown(trace_events: List[dict]) -> str:
-    if not trace_events:
-        return ""
-
-    parts = ["---", "### 执行过程"]
-
-    for i, event in enumerate(trace_events, start=1):
-        parts.append(f"#### Step {i}")
-
-        if event.get("thought"):
-            parts.append(f"- **thought**: {event['thought']}")
-        if event.get("action"):
-            parts.append(f"- **action**: `{event['action']}`")
-        if event.get("tool_name"):
-            parts.append(f"- **tool**: `{event['tool_name']}`")
-        if event.get("tool_args"):
-            parts.append(f"- **args**: `{json.dumps(event['tool_args'], ensure_ascii=False)}`")
-        if event.get("tool_result_summary"):
-            parts.append(f"- **result**: {event['tool_result_summary']}")
-        if event.get("final_answer") and event.get("action") == "final":
-            parts.append(f"- **final**: {event['final_answer']}")
-
-        parts.append("")
-
-    return "\n".join(parts).strip()
-
-
-def compose_visible_response(final_text: str, trace_events: List[dict]) -> str:
-    trace_md = render_trace_event_dicts(trace_events[-20:])
-    final_text = (final_text or "").strip()
-
-    if trace_md:
-        return f"{final_text}\n\n{trace_md}".strip()
-    return final_text
-
-
-def render_step_markdown(step_index: int, event_group: dict) -> str:
-    lines = [f"[step {step_index}]"]
-
-    thought = (event_group.get("thought") or "").strip()
-    command = (event_group.get("command") or "").strip()
-    status = (event_group.get("status") or "").strip()
-    result_summary = (event_group.get("tool_result_summary") or "").strip()
-
-    if thought:
-        lines.append(f"thought: {thought}")
-    if command:
-        lines.append(f"command: {command}")
-    if status:
-        lines.append(f"status: {status}")
-    if result_summary:
-        lines.append(f"result: {result_summary}")
-
-    body = "\n".join(lines)
-    return f"```text\n{body}\n```\n\n"
-
-def extract_final_text_from_events(events: List[AgentEvent]) -> str:
-    finals = [e.content.strip() for e in events if e.type == "final" and isinstance(e.content, str) and e.content.strip()]
-    if finals:
-        return finals[-1]
-    return ""
-
-
-def agent_event_to_trace_dict(event: AgentEvent) -> dict:
-    result_summary = ""
-    if event.type == "tool_result" and event.result:
-        try:
-            content = event.result.get("content", "")
-            if isinstance(content, str):
-                one_line = content.replace("\n", " ").strip()
-                result_summary = one_line[:240] + ("..." if len(one_line) > 240 else "")
-            else:
-                result_summary = str(content)[:240]
-        except Exception:
-            result_summary = ""
-
-    return {
-        "thought": event.content if event.type == "thought" else "",
-        "action": "final" if event.type == "final" else ("tool" if event.type in ("tool_call", "tool_result") else ""),
-        "tool_name": event.tool_name or "",
-        "tool_args": event.tool_args or {},
-        "final_answer": event.content if event.type == "final" else "",
-        "tool_result_summary": result_summary,
-        "command": event.command or "",
-        "status": event.status or "",
-    }
-
-
-def group_events_by_step(events: List[AgentEvent]) -> List[dict]:
-    grouped: List[dict] = []
-    step_map: Dict[int, dict] = {}
-
-    for event in events:
-        step_no = int(getattr(event, "step", 0) or 0)
-        if step_no <= 0:
-            step_no = len(grouped) + 1
-
-        if step_no not in step_map:
-            step_map[step_no] = {
-                "step": step_no,
-                "thought": "",
-                "command": "",
-                "status": "",
-                "tool_result_summary": "",
-                "final_answer": "",
-            }
-            grouped.append(step_map[step_no])
-
-        item = step_map[step_no]
-
-        if event.type == "thought" and event.content:
-            item["thought"] = event.content.strip()
-
-        elif event.type == "tool_call":
-            if event.command:
-                item["command"] = str(event.command).strip()
-
-        elif event.type == "tool_result":
-            if event.status:
-                item["status"] = str(event.status).strip()
-
-            try:
-                content = ""
-                if isinstance(event.result, dict):
-                    content = event.result.get("content", "")
-                elif event.result is not None:
-                    content = str(event.result)
-
-                if isinstance(content, str):
-                    one_line = content.replace("\n", " ").strip()
-                    item["tool_result_summary"] = one_line[:240] + ("..." if len(one_line) > 240 else "")
-                elif content:
-                    item["tool_result_summary"] = str(content)[:240]
-            except Exception:
-                pass
-
-        elif event.type == "final" and event.content:
-            item["final_answer"] = event.content.strip()
-
-    return grouped
-
-
-def render_trace_event_dicts(trace_events: List[dict]) -> str:
-    if not trace_events:
-        return ""
-
-    parts = ["---", "### 执行过程"]
-
-    display_index = 0
-    for event in trace_events:
-        has_visible_content = any([
-            event.get("thought"),
-            event.get("command"),
-            event.get("status"),
-            event.get("tool_result_summary"),
-            event.get("final_answer"),
-        ])
-        if not has_visible_content:
-            continue
-
-        display_index += 1
-        parts.append(f"#### Step {display_index}")
-
-        if event.get("thought"):
-            parts.append(f"- **thought**: {event['thought']}")
-        if event.get("command"):
-            parts.append(f"- **command**: `{event['command']}`")
-        if event.get("status"):
-            parts.append(f"- **status**: `{event['status']}`")
-        if event.get("tool_result_summary"):
-            parts.append(f"- **result**: {event['tool_result_summary']}")
-        if event.get("final_answer"):
-            parts.append(f"- **final**: {event['final_answer']}")
-
-        parts.append("")
-
-    return "\n".join(parts).strip()
-
-
 def sse_chunk(chunk_obj: dict) -> str:
     return f"data: {json.dumps(chunk_obj, ensure_ascii=False)}\n\n"
 
@@ -509,13 +186,13 @@ def ensure_agent(conversation_key: str) -> AgentLoop:
             f"[ensure_agent] REUSE key={conversation_key}, chat_id={chat_id}, session_id={session_id}\n"
         )
 
-        agent = AgentLoop(chat_id=chat_id)
+        agent = build_agent(chat_id=chat_id)
         if agent.load_session(session_id):
             sys.stderr.write("[ensure_agent] session loaded successfully\n")
             return agent
 
         sys.stderr.write("[ensure_agent] session load failed, starting new session in existing chat\n")
-        agent.start_session(WEB_CHAT_INIT_TASK, load_existing=False, inject_current_chat_memory=True)
+        start_new_session(agent, WEB_CHAT_INIT_TASK, inject_current_chat_memory=True)
         _conversation_map[conversation_key]["session_id"] = agent.session_id
         sys.stderr.write(
             f"[ensure_agent] new session created in existing chat, session_id={agent.session_id}\n"
@@ -525,8 +202,8 @@ def ensure_agent(conversation_key: str) -> AgentLoop:
     sys.stderr.write(f"[ensure_agent] NEW key={conversation_key}\n")
     chat_memory = ChatMemory(CHAT_STORAGE_PATH, SESSION_STORAGE_PATH)
     chat_id = chat_memory.create_chat()
-    agent = AgentLoop(chat_id=chat_id)
-    agent.start_session(WEB_CHAT_INIT_TASK, load_existing=False, inject_current_chat_memory=True)
+    agent = build_agent(chat_id=chat_id)
+    start_new_session(agent, WEB_CHAT_INIT_TASK, inject_current_chat_memory=True)
 
     _conversation_map[conversation_key] = {
         "chat_id": chat_id,
@@ -538,15 +215,14 @@ def ensure_agent(conversation_key: str) -> AgentLoop:
     return agent
 
 
-def drive_agent_turn(agent: AgentLoop, user_message: str, max_steps: int = MAX_WEB_STEPS) -> Tuple[str, List[dict]]:
+def drive_agent_turn(agent: AgentLoop, user_message: str, max_steps: int = MAX_WEB_STEPS) -> Tuple[str, List]:
     user_message = normalize_user_text(user_message)
     sys.stderr.write(f"[drive_agent_turn] user_message (truncated): {user_message[:200]}\n")
 
     if hasattr(agent, "finished"):
         agent.finished = False
 
-    agent.inject_user_message(user_message)
-    result = agent.run_until_stop(max_steps=max_steps)
+    result = run_entry_turn(agent, max_steps=max_steps, user_message=user_message)
     grouped_trace = group_events_by_step(result.events)
 
     if result.stop_reason == "final" and result.final_answer:
@@ -561,7 +237,9 @@ def drive_agent_turn(agent: AgentLoop, user_message: str, max_steps: int = MAX_W
         sys.stderr.write("[drive_agent_turn] stop: permission blocked\n")
         return result.user_facing_text(), grouped_trace
 
-    sys.stderr.write(f"[drive_agent_turn] stop: error={result.error_message}\n")
+    sys.stderr.write(
+        f"[drive_agent_turn] stop: {result.stop_reason}={result.error_message}\n"
+    )
     return result.user_facing_text(), grouped_trace
 
 
@@ -599,7 +277,7 @@ def stream_agent_turn(agent: AgentLoop, user_message: str, max_steps: int = MAX_
             while rendered_steps < len(grouped_steps):
                 rendered_steps += 1
                 step_group = grouped_steps[rendered_steps - 1]
-                step_md = render_step_markdown(rendered_steps, step_group)
+                step_md = render_web_step_markdown(rendered_steps, step_group)
 
                 for piece in split_text_chunks(step_md, max_chars=350):
                     yield sse_chunk(make_chunk(chunk_id, piece))
@@ -755,7 +433,8 @@ def create_chat_completion():
             )
 
         final_text, trace_events = drive_agent_turn(agent, user_content, MAX_WEB_STEPS)
-        assistant_content = compose_visible_response(final_text, trace_events)
+        assistant_content = compose_web_response(final_text, trace_events)
+        trace_payload = render_web_trace_payload(trace_events[-20:])
 
     except Exception as e:
         sys.stderr.write(f"[create_chat_completion] agent error: {e}\n")
@@ -782,6 +461,7 @@ def create_chat_completion():
             "total_tokens": 0,
         },
         "conversation_key": conversation_key,
+        "trace": trace_payload,
     }
 
     resp = jsonify(completion)

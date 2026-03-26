@@ -112,16 +112,15 @@
 ### M1-T1：修复主入口断点 `[已完成]`
 
 任务目标：
-修复 `scripts/run_agent.py` 与 `AgentLoop` 之间的断裂，确保“命令行主入口”可以独立完成一次完整任务。
+补齐统一执行主干，让当前保留的交互式 CLI 与 Web 入口都基于同一套会话启动、单轮执行和停止语义运行。
 
 当前问题：
 
-- `scripts/run_agent.py` 调用了 `agent.run(args.task)`，但 `AgentLoop` 中没有 `run()` 方法
 - 主入口语义不清晰，不知道是“自动执行到 final”还是“只启动 session”
+- 入口层曾经各自维护执行循环与停止判断
 
 要实现的功能：
 
-- 为 `AgentLoop` 增加明确的高层运行接口，或者改造 `scripts/run_agent.py` 改用现有 `start_session + step_once` 机制
 - 明确主入口的执行模型：
   - 启动 session
   - 注入初始任务
@@ -132,14 +131,13 @@
 
 建议输出：
 
-- 一个可直接运行的 CLI 主入口
-- 清晰的返回语义：成功 final、达到步数上限、执行异常
+- 一个统一的高层执行接口
+- 清晰的返回语义：成功 final、达到步数上限、权限阻塞、分类错误
 
 完成标准：
 
-- `scripts/run_agent.py` 可以独立运行
-- 给定简单分析任务时，脚本能输出最终结果
-- 最大步数命中时，行为可预测
+- `chat_agent.py` 与 `openai_adapter.py` 都复用统一执行主干
+- 最大步数命中和异常中断时，行为可预测
 
 #### M1-T1 设计目标进一步收敛
 
@@ -147,22 +145,18 @@
 
 - 已完成
 - 已实现统一高层执行接口 `run_until_stop()`
-- `run_agent.py` 已改为可运行的薄入口
 - `chat_agent.py` 已切到统一执行主干
 - `openai_adapter.py` 的非流式路径已切到统一执行主干
 - 运行产物 `task.txt` 已删除，CLI 不再依赖文件注入初始任务
 
 这一任务块只解决“主入口断点”和“主入口运行模型缺失”两个问题，不处理更广义的执行语义统一。也就是说：
 
-- `M1-T1` 只要求 `run_agent.py` 可用
 - `M1-T1` 不要求一次性彻底重构所有入口
 - `M1-T1` 产出的能力应能被 `M1-T2` 继续复用，而不是推倒重来
 
 建议采用的实现方向：
 
-- 保持 `scripts/run_agent.py` 尽量薄
 - 把“一次性任务执行”主循环下沉到 `AgentLoop`
-- `run_agent.py` 只负责参数解析、实例化 agent、打印结果、设置退出码
 
 这样做的原因：
 
@@ -175,11 +169,10 @@
 ##### M1-T1-A：定义主入口的目标行为 `[已完成]`
 
 任务目标：
-先把“一次性 CLI 任务”到底要怎么运行说清楚，避免修了断点但行为仍不稳定。
+先把当前保留入口的目标行为说清楚，避免交互式 CLI 和 Web 继续分叉。
 
 要实现的功能：
 
-- 定义 `run_agent.py` 的标准行为：
   - 接收一个任务字符串
   - 创建一个新 session
   - 将任务作为初始输入启动 agent
@@ -203,7 +196,6 @@
 
 完成标准：
 
-- 团队成员能明确理解 `run_agent.py` 是“批处理入口”而不是“交互入口”
 - 后续编码时不会再出现不同人理解不同的情况
 
 ##### M1-T1-B：补齐 AgentLoop 的高层运行接口 `[已完成]`
@@ -264,7 +256,6 @@
 ##### M1-T1-C：定义高层运行结果对象 `[已完成]`
 
 任务目标：
-不要让 `run_agent.py` 依赖“某个方法刚好返回字符串”，而是先定义清晰的运行结果。
 
 要实现的功能：
 
@@ -345,10 +336,8 @@
 - 不会出现无限循环
 - 达到步数上限时不会伪装成成功完成
 
-##### M1-T1-E：改造 run_agent.py 为薄入口 `[已完成]`
 
 任务目标：
-让 `run_agent.py` 不再持有业务流程，只做脚本入口职责。
 
 要实现的功能：
 
@@ -377,11 +366,9 @@
 
 涉及文件：
 
-- `scripts/run_agent.py`
 
 完成标准：
 
-- `run_agent.py` 只保留入口层代码
 - 没有重复的 step 循环和事件解析逻辑
 - 输出和退出码规则一致
 
@@ -414,7 +401,6 @@
 
 涉及文件：
 
-- `scripts/run_agent.py`
 - 如需要，可补辅助格式化函数
 
 完成标准：
@@ -464,7 +450,6 @@
   - 新增高层运行接口
   - 收口主循环与停止条件
   - 定义并返回结构化运行结果
-- `scripts/run_agent.py`
   - 改为薄入口
   - 接入新的高层运行接口
   - 统一输出与退出码
@@ -485,7 +470,6 @@
 #### M1-T1 风险点
 
 - 如果高层运行接口直接返回字符串，后续很可能还要再拆一次
-- 如果在 `run_agent.py` 中直接复制 step 循环，会加剧入口重复逻辑
 - 如果在这一步就同时改 Web/CLI/交互入口，任务会迅速失控
 - 如果不定义 `stop_reason`，后续入口层仍会各自解释执行状态
 
@@ -503,7 +487,6 @@
 
 - `agent/custom_types.py` 中新增 `RunResult`
 - `agent/loop.py` 中新增 `run_until_stop()`
-- `scripts/run_agent.py` 已接入统一执行主干
 - `scripts/chat_agent.py` 已接入统一执行主干，并恢复 step 级实时输出
 - `scripts/openai_adapter.py` 非流式路径已接入统一执行主干
 - `.gitignore` 已忽略 `sessions/`、`chats/`、`task.txt`
@@ -526,7 +509,6 @@
 
 验收依据：
 
-- `run_agent.py` 不再调用不存在的方法
 - `AgentLoop` 已成为统一的连续执行入口
 - CLI 交互入口和 Web 非流式入口已复用统一执行主干
 - `task.txt` 已退役，CLI 不再依赖文件输入
@@ -614,7 +596,6 @@
 
 验收依据：
 
-- `scripts/run_agent.py`、`scripts/chat_agent.py`、`scripts/openai_adapter.py` 不再各自维护一套核心停止逻辑
 - SSE 流式路径与非流式路径共享同一套停止语义
 - 权限阻塞已经从隐式工具结果升级为核心停止原因
 - 已完成 `py_compile` 校验
@@ -623,7 +604,7 @@
 下一步工作：
 
 1. 进入 `M1-T3`
-   - 明确三个入口的职责边界
+   - 明确两个入口的职责边界
    - 识别还能进一步抽出的共享驱动逻辑
 
 2. 再做 `M1-T4`
@@ -634,21 +615,19 @@
    - 将目前的 smoke 校验转为正式测试
    - 给 `run_until_stop()`、`_iter_until_stop()`、停止原因和 CLI 输出加回归保护
 
-### M1-T3：梳理三类入口职责边界
+### M1-T3：梳理两类入口职责边界 `[已完成]`
 
 任务目标：
-明确项目内三个入口的角色，避免逻辑重复和后续维护混乱。
+明确项目内两个入口的角色，避免逻辑重复和后续维护混乱。
 
 涉及入口：
 
-- `scripts/run_agent.py`
 - `scripts/chat_agent.py`
 - `scripts/openai_adapter.py`
 
 要实现的功能：
 
-- 为三个入口定义清晰定位：
-  - `run_agent.py`：一次性任务执行入口
+- 为两个入口定义清晰定位：
   - `chat_agent.py`：本地交互式调试入口
   - `openai_adapter.py`：Web / OpenWebUI 对接入口
 - 抽取公共驱动逻辑，避免各入口重复处理：
@@ -660,16 +639,38 @@
 
 建议输出：
 
-- 一个共享的驱动层，供三个入口复用
+- 一个共享的驱动层，供两个入口复用
 - 一份入口职责说明，方便后续扩展
 
 完成标准：
 
-- 三个入口不再重复维护相同流程
+- 两个入口不再重复维护相同流程
 - 每个入口的输入输出职责清晰
 - 新增入口时可以复用公共驱动层
 
-### M1-T4：统一事件协议与可观察性
+当前完成情况：
+
+- 已新增 `scripts/entry_common.py`，作为两个入口共享的脚本层公共驱动模块
+- 已将以下公共逻辑收口到共享层：
+  - agent 构建
+  - 新 session 启动
+  - 单轮执行驱动
+  - CLI step 文本渲染
+  - Web trace 分组与 markdown 渲染
+- `scripts/chat_agent.py` 已明确为本地交互调试入口：
+  - 负责 chat 选择、命令式交互和终端输出
+  - 不再自行维护独立执行主干
+- `scripts/openai_adapter.py` 已明确为 Web/OpenWebUI 适配入口：
+  - 负责 HTTP/SSE 协议、conversation key 映射和响应封装
+  - 不再保留旧的“从文本输出反向解析 trace”的主要路径
+
+验收依据：
+
+- 两个入口都通过共享层复用同一套 session 启动和单轮执行接口
+- `openai_adapter.py` 中大量历史兼容函数已删除，入口职责更聚焦
+- `python3 -m py_compile scripts/*.py agent/*.py tools/*.py` 已通过
+
+### M1-T4：统一事件协议与可观察性 `[已完成]`
 
 任务目标：
 让系统的运行过程可观察、可调试、可被不同前端消费。
@@ -704,6 +705,30 @@
 - CLI、交互式 CLI、Web 的 trace 内容一致
 - 不同消费端只是渲染不同，不再重建业务语义
 - 调试日志与用户可见 trace 可以区分
+
+当前完成情况：
+
+- 已在 `agent/events.py` 中补充事件协议约束和共享 trace 视图：
+  - `USER_TRACE_FIELDS_BY_TYPE`
+  - `TraceEntry`
+  - `TraceStepView`
+  - `iter_user_trace_entries()`
+  - `build_trace_steps()`
+  - `trace_steps_to_payload()`
+- 已明确区分两层语义：
+  - 用户可见 trace：`thought / tool / result / final / error`
+  - 内部调试字段：`tool_args / command / status / timestamp`
+- `scripts/entry_common.py` 已改为只消费共享 trace 视图：
+  - CLI 文本输出基于统一 `TraceEntry`
+  - Web markdown 基于统一 `TraceStepView`
+  - Web JSON 基于统一 payload 输出
+- `scripts/openai_adapter.py` 的非流式响应已附带 `trace` 字段，便于 Web 端直接消费结构化执行过程
+
+验收依据：
+
+- CLI 和 Web 的用户可见 trace 已统一为同一组字段，不再出现一端展示 `command/status`、另一端展示 `thought/tool/result` 的分裂
+- `openai_adapter.py` 不再自行解释事件业务语义，只消费共享事件视图
+- 调试字段仍保留在原始 `AgentEvent` 中，可继续用于内部排障
 
 ### M1-T5：补齐最小测试基线
 
@@ -769,7 +794,7 @@
 - 越界写入能被拦截
 - 权限阻塞不会被误判为一般执行失败
 
-### M1-T7：收口错误模型与停止原因
+### M1-T7：收口错误模型与停止原因 `[已完成]`
 
 任务目标：
 把当前“抛异常、打印日志、入口各自解释”的错误处理方式收口成统一模型。
@@ -803,6 +828,35 @@
 - 所有入口都能稳定识别停止原因
 - 错误不再散落在各层自行解释
 - Web 层不需要靠字符串特征判断核心状态
+
+当前完成情况：
+
+- 已将 `RunResult.stop_reason` 扩展为标准枚举：
+  - `final`
+  - `max_steps`
+  - `permission_blocked`
+  - `tool_error`
+  - `llm_error`
+  - `invalid_model_output`
+  - `error`（仅作为未分类内部异常兜底）
+- 已新增 `agent/errors.py`，定义分类异常：
+  - `AgentExecutionError`
+  - `LLMExecutionError`
+  - `InvalidModelOutputError`
+  - `ToolExecutionError`
+- `AgentLoop.step_once()` 已完成异常映射：
+  - `llm.chat()` 失败 -> `llm_error`
+  - 模型输出非 JSON、未知 action、未知工具 -> `invalid_model_output`
+  - 工具执行抛异常、工具返回非法对象 -> `tool_error`
+- `_iter_until_stop()` 已统一将分类异常收口为结构化 `RunResult`
+- `RunResult.user_facing_text()` 已按停止原因提供稳定提示文本
+- Web 适配层日志已直接记录 `stop_reason`，不再笼统记为 `error`
+
+验收依据：
+
+- 单轮执行接口现在可以稳定区分模型请求失败、模型协议错误、工具执行异常和权限阻塞
+- 入口层不再需要自己推断“这是不是模型问题/工具问题”
+- 失败发生在第几步时，`RunResult.step_count` 会返回实际失败步数
 
 ### M1-T8：整理配置与运行方式
 
@@ -862,7 +916,7 @@
 完成里程碑 1 后，项目应达到以下状态：
 
 - 当前代码库成为一个稳定的代理底座
-- CLI / 交互式 CLI / Web 三个入口都可用
+- 交互式 CLI 与 Web 两个入口都可用
 - 基础事件和停止原因统一
 - 权限、错误、配置、trace 都已收口
 - 可以安全进入下一阶段，开始真正落地 `Artifact Store` 与 orchestrator

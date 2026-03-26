@@ -11,66 +11,42 @@ import config
 
 from agent.loop import AgentLoop
 from agent.chat_memory import ChatMemory
-from agent.events import AgentEvent
+from entry_common import (
+    build_agent,
+    render_cli_step_text,
+    run_entry_turn,
+    start_new_session,
+)
 
 
-def resolve_initial_task(cli_task: str) -> str:
-    if cli_task:
-        return cli_task
-    return "请先探索当前工程，并准备协助我完成迁移相关工作。"
+def require_initial_task(cli_task: str) -> str:
+    task = (cli_task or "").strip()
+    if task:
+        return task
+    raise ValueError("必须显式提供初始任务。请使用: python3 scripts/chat_agent.py \"你的任务\"")
 
 
-def summarize_tool_result(result: object, limit: int = 240) -> str:
-    if not isinstance(result, dict):
-        text = str(result or "").strip()
-        return text if len(text) <= limit else text[:limit] + "..."
-
-    content = result.get("content", "")
-    if not isinstance(content, str):
-        content = str(content)
-    content = content.replace("\n", " ").strip()
-    return content if len(content) <= limit else content[:limit] + "..."
+def prompt_required_task(prompt_text: str) -> str:
+    task = input(prompt_text).strip()
+    if not task:
+        raise ValueError("必须显式输入初始任务。")
+    return task
 
 
-def render_events(events: list[AgentEvent]) -> str:
-    lines = []
-
-    for event in events:
-        if event.type == "thought" and event.content:
-            lines.append(f"thought: {event.content.strip()}")
-            continue
-
-        if event.type == "tool_call":
-            tool_name = (event.tool_name or "").strip()
-            if tool_name:
-                lines.append(f"tool: {tool_name}")
-            continue
-
-        if event.type == "tool_result":
-            summary = summarize_tool_result(event.result)
-            if summary:
-                lines.append(f"result: {summary}")
-            continue
-
-        if event.type == "final" and event.content:
-            lines.append(event.content.strip())
-            continue
-
-        if event.type == "error" and event.content:
-            lines.append(f"error: {event.content.strip()}")
-
-    return "\n".join(lines).strip()
-
-
-def run_agent_until_stop(agent: AgentLoop, max_steps: int) -> None:
-    def handle_step(step_events: list[AgentEvent]) -> None:
-        rendered = render_events(step_events)
+def drive_cli_session_until_stop(agent: AgentLoop, max_steps: int, user_message: Optional[str] = None) -> None:
+    def handle_step(step_events) -> None:
+        rendered = render_cli_step_text(step_events)
         if not rendered:
             return
         print("\n===== AGENT =====", flush=True)
         print(rendered, flush=True)
 
-    result = agent.run_until_stop(max_steps=max_steps, on_step=handle_step)
+    result = run_entry_turn(
+        agent,
+        max_steps=max_steps,
+        user_message=user_message,
+        on_step=handle_step,
+    )
 
     if result.stop_reason == "final":
         print("\n[system] 当前 session 已完成。", flush=True)
@@ -124,7 +100,7 @@ def main() -> None:
     default_root = config.get("agent.root", ".")
 
     parser = argparse.ArgumentParser(description="Interactive agent session")
-    parser.add_argument("task", nargs="?", default="")
+    parser.add_argument("task", help="初始任务")
     parser.add_argument("--model", default=default_model)
     parser.add_argument("--max-steps", type=int, default=default_max_steps)
     parser.add_argument("--root", default=default_root)
@@ -132,7 +108,7 @@ def main() -> None:
     args = parser.parse_args()
 
     root_path = os.path.abspath(args.root)
-    task_content = resolve_initial_task(args.task)
+    task_content = require_initial_task(args.task)
 
     chat_storage_path = config.get("agent.chat_storage_path", "./chats")
     session_storage_path = config.get("agent.session_storage_path", "./sessions")
@@ -145,7 +121,7 @@ def main() -> None:
     else:
         print(f"[system] 已选择恢复 chat: {selected_chat_id}")
 
-    agent = AgentLoop(
+    agent = build_agent(
         model=args.model,
         max_steps=args.max_steps,
         root=args.root,
@@ -170,17 +146,13 @@ def main() -> None:
     print()
 
     try:
-        agent.start_session(
-            task_content,
-            load_existing=False,
-            inject_current_chat_memory=True,
-        )
+        start_new_session(agent, task_content, inject_current_chat_memory=True)
 
         print(f"[system] 当前 chat_id: {agent.chat_id}")
         print(f"[system] 当前 session_id: {agent.session_id}")
         print("[system] 会话已创建，开始自动执行。")
 
-        run_agent_until_stop(agent, agent.max_steps)
+        drive_cli_session_until_stop(agent, agent.max_steps)
 
     except Exception as e:
         print(f"\n初始化失败：{e}", file=sys.stderr)
@@ -219,61 +191,47 @@ def main() -> None:
             continue
 
         if user_input == "/reset":
-            new_task = input("请输入新的初始任务：").strip()
-            if not new_task:
-                new_task = "请探索当前工程，并准备协助我完成任务。"
             try:
+                new_task = prompt_required_task("请输入新的初始任务：")
                 finalize_before_switch()
-                agent = AgentLoop(
+                agent = build_agent(
                     model=args.model,
                     max_steps=args.max_steps,
                     root=args.root,
                     chat_id=agent.chat_id,
                 )
-                agent.start_session(
-                    new_task,
-                    load_existing=False,
-                    inject_current_chat_memory=True,
-                )
+                start_new_session(agent, new_task, inject_current_chat_memory=True)
                 print("[system] 已重置当前 session，默认继续执行。")
                 print(f"[system] 当前 chat_id: {agent.chat_id}")
                 print(f"[system] 当前 session_id: {agent.session_id}")
-                run_agent_until_stop(agent, agent.max_steps)
+                drive_cli_session_until_stop(agent, agent.max_steps)
             except Exception as e:
                 print(f"\n重置后运行失败：{e}", file=sys.stderr)
             continue
 
         if user_input == "/newchat":
-            new_task = input("请输入新的初始任务：").strip()
-            if not new_task:
-                new_task = "请探索当前工程，并准备协助我完成任务。"
             try:
+                new_task = prompt_required_task("请输入新的初始任务：")
                 finalize_before_switch()
                 new_chat_id = chat_memory.create_chat()
-                agent = AgentLoop(
+                agent = build_agent(
                     model=args.model,
                     max_steps=args.max_steps,
                     root=args.root,
                     chat_id=new_chat_id,
                 )
-                agent.start_session(
-                    new_task,
-                    load_existing=False,
-                    inject_current_chat_memory=True,
-                )
+                start_new_session(agent, new_task, inject_current_chat_memory=True)
                 print(f"[system] 已创建新 chat: {agent.chat_id}")
                 print(f"[system] 当前 session_id: {agent.session_id}")
                 print("[system] 默认继续执行。")
-                run_agent_until_stop(agent, agent.max_steps)
+                drive_cli_session_until_stop(agent, agent.max_steps)
             except Exception as e:
                 print(f"\n创建新 chat 失败：{e}", file=sys.stderr)
             continue
 
         try:
-            agent.inject_user_message(user_input)
-            agent.save_session()
             print("[system] 已接收消息，默认继续执行。")
-            run_agent_until_stop(agent, agent.max_steps)
+            drive_cli_session_until_stop(agent, agent.max_steps, user_message=user_input)
         except Exception as e:
             print(f"\n本轮执行失败：{e}", file=sys.stderr)
             print("session 仍然保留，你可以继续输入下一条消息。")
