@@ -1,5 +1,8 @@
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
+
+if TYPE_CHECKING:
+    from .events import AgentEvent
 
 
 @dataclass
@@ -25,3 +28,17 @@ class ChatResponse:
     raw: Dict[str, Any]
     usage: Dict[str, Any] = field(default_factory=dict)
     finish_reason: Optional[str] = None
+
+
+StopReason = Literal["final", "max_steps", "error"]
+
+
+@dataclass
+class RunResult:
+    final_answer: str
+    stop_reason: StopReason
+    step_count: int
+    events: List["AgentEvent"] = field(default_factory=list)
+    chat_id: str = ""
+    session_id: str = ""
+    error_message: str = ""

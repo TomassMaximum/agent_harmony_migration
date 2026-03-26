@@ -4,7 +4,7 @@ import re
 import threading
 import uuid
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .llm import DeepSeekLLM
 from .memory import SessionMemory
@@ -12,7 +12,7 @@ from .chat_memory import ChatMemory
 from .permissions import PermissionManager
 from .prompts import AGENT_SYSTEM_PROMPT
 from .tool_registry import build_tool_registry, render_tool_descriptions, render_tool_command
-from .custom_types import ChatRequest, Message
+from .custom_types import ChatRequest, Message, RunResult
 from .events import AgentEvent
 
 import sys
@@ -110,7 +110,6 @@ class AgentLoop:
                     self.finished = False
                     self.pause_requested = False
                     self.chat_memory.add_session_to_chat(self.chat_id, self.session_id)
-                    print(f"[agent] 已恢复会话: {self.session_id} (chat: {self.chat_id})")
                     return
 
             tools_text = render_tool_descriptions(self.registry)
@@ -128,7 +127,6 @@ class AgentLoop:
                             content=memory_block,
                         )
                     )
-                    print("[agent] 已注入当前 chat 的摘要记忆")
 
             self.messages.append(
                 Message(
@@ -149,7 +147,6 @@ class AgentLoop:
             self.pause_requested = False
 
             self.chat_memory.add_session_to_chat(self.chat_id, self.session_id)
-            print(f"[agent] 新会话已启动: {self.session_id} (chat: {self.chat_id})")
 
     def reset_session(self) -> None:
         with self.lock:
@@ -200,14 +197,92 @@ class AgentLoop:
 
     def send_user_message(self, user_message: str) -> str:
         self.inject_user_message(user_message)
-        events = self.step_once()
-        self.save_session()
+        result = self.run_until_stop()
 
-        final_event = next((e for e in events if e.type == "final"), None)
-        if final_event and final_event.content:
-            return final_event.content
+        if result.stop_reason == "final" and result.final_answer:
+            return result.final_answer
+
+        if result.stop_reason == "error":
+            return f"本轮执行失败：{result.error_message or 'unknown error'}"
 
         return "本轮未生成最终答复。"
+
+    def _extract_final_answer(self, events: List[AgentEvent]) -> str:
+        for event in reversed(events):
+            if event.type == "final" and event.content:
+                return event.content.strip()
+        return ""
+
+    def run_until_stop(
+        self,
+        max_steps: Optional[int] = None,
+        on_step: Optional[Callable[[List[AgentEvent]], None]] = None,
+    ) -> RunResult:
+        with self.lock:
+            if not self.session_started:
+                raise RuntimeError("session 尚未开始，请先调用 start_session()")
+
+        step_limit = self.max_steps if max_steps is None else max_steps
+        if not isinstance(step_limit, int):
+            step_limit = self.max_steps
+        if step_limit < 0:
+            step_limit = 0
+
+        all_events: List[AgentEvent] = []
+        step_count = 0
+
+        while step_count < step_limit:
+            try:
+                step_events = self.step_once()
+            except Exception as e:
+                self.save_session()
+
+                error_event = AgentEvent(
+                    type="error",
+                    step=max(1, step_count + 1),
+                    content=str(e),
+                )
+                all_events.append(error_event)
+                if on_step:
+                    on_step([error_event])
+
+                return RunResult(
+                    final_answer=self._extract_final_answer(all_events),
+                    stop_reason="error",
+                    step_count=step_count,
+                    events=all_events,
+                    chat_id=self.chat_id,
+                    session_id=self.session_id,
+                    error_message=str(e),
+                )
+
+            if step_events:
+                all_events.extend(step_events)
+                if on_step:
+                    on_step(step_events)
+
+            step_count += 1
+
+            final_answer = self._extract_final_answer(step_events)
+            if final_answer:
+                return RunResult(
+                    final_answer=final_answer,
+                    stop_reason="final",
+                    step_count=step_count,
+                    events=all_events,
+                    chat_id=self.chat_id,
+                    session_id=self.session_id,
+                )
+
+        self.save_session()
+        return RunResult(
+            final_answer=self._extract_final_answer(all_events),
+            stop_reason="max_steps",
+            step_count=step_count,
+            events=all_events,
+            chat_id=self.chat_id,
+            session_id=self.session_id,
+        )
         
     def _serialize_messages_for_summary(self, messages: List[Message], max_items: int = 80, max_chars: int = 16000) -> str:
         selected = messages[-max_items:]
@@ -260,7 +335,6 @@ class AgentLoop:
                 "updated_at": datetime.utcnow().isoformat(),
             }
         except Exception as e:
-            print(f"[agent] 生成 session 摘要失败，使用 fallback: {e}")
             return {
                 "title": f"Session {self.session_id[:8]}",
                 "summary": raw_text[:1000],
@@ -316,7 +390,6 @@ class AgentLoop:
                 "session_ids": [x["session_id"] for x in session_summaries],
             }
         except Exception as e:
-            print(f"[agent] 生成 chat 摘要失败，使用 fallback: {e}")
             fallback_summary = "\n".join(
                 f"- {x.get('title', '')}: {x.get('summary', '')[:200]}"
                 for x in session_summaries[-10:]
@@ -346,9 +419,6 @@ class AgentLoop:
         chat_meta = self._build_chat_summary(session_summaries)
         self.chat_memory.save_chat_meta(chat_id, chat_meta)
 
-        print(f"[agent] 已更新 session 摘要: {session_id}")
-        print(f"[agent] 已更新 chat 摘要: {chat_id}")
-
     def step_once(self) -> List[AgentEvent]:
         with self.lock:
             if not self.session_started:
@@ -365,7 +435,6 @@ class AgentLoop:
 
             messages_snapshot = list(self.messages)
 
-        print("\n[agent] 正在请求模型...", flush=True)
         response = self.llm.chat(ChatRequest(messages=messages_snapshot, model=self.model))
         raw_text = response.content.strip()
 
@@ -479,13 +548,6 @@ class AgentLoop:
         tool = self.registry[tool_name]
         tool_result = tool.run(**tool_args)
 
-        print("[tool_feedback]", json.dumps({
-                "tool_name": tool_name,
-                "tool_args": tool_args,
-                "ok": tool_result.ok,
-                "content": tool_result.content[:300] if isinstance(tool_result.content, str) else str(tool_result.content),
-                "meta": tool_result.meta or {},
-            }, ensure_ascii=False))
         return {
             "tool_name": tool_name,
             "tool_args": tool_args,

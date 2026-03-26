@@ -24,10 +24,22 @@ def main() -> None:
 
     try:
         agent = AgentLoop(model=args.model, max_steps=args.max_steps)
-        result = agent.run(args.task)
+        agent.start_session(args.task, load_existing=False, inject_current_chat_memory=True)
+        result = agent.run_until_stop(max_steps=args.max_steps)
 
         print("\n===== FINAL ANSWER =====")
-        print(result)
+        if result.final_answer:
+            print(result.final_answer)
+        elif result.stop_reason == "max_steps":
+            print("本轮执行达到最大步数，尚未生成最终答复。")
+        else:
+            print(result.error_message or "本轮执行失败。")
+
+        if result.stop_reason == "final":
+            sys.exit(0)
+        if result.stop_reason == "max_steps":
+            sys.exit(2)
+        sys.exit(1)
 
     except Exception as e:
         print(f"运行失败：{e}", file=sys.stderr)

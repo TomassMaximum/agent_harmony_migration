@@ -37,65 +37,50 @@ def render_events(events: list[AgentEvent]) -> str:
 
     for event in events:
         if event.type == "thought" and event.content:
-            lines.append(f"[thought] {event.content.strip()}")
+            lines.append(f"thought: {event.content.strip()}")
             continue
 
         if event.type == "tool_call":
-            command = (event.command or event.tool_name or "").strip()
-            if command:
-                lines.append(f"[tool] {command}")
+            tool_name = (event.tool_name or "").strip()
+            if tool_name:
+                lines.append(f"tool: {tool_name}")
             continue
 
         if event.type == "tool_result":
-            tool_name = (event.tool_name or "").strip()
-            status = (event.status or "").strip() or "unknown"
             summary = summarize_tool_result(event.result)
-            prefix = f"[tool_result] {tool_name} ({status})".strip()
-            lines.append(f"{prefix}: {summary}" if summary else prefix)
+            if summary:
+                lines.append(f"result: {summary}")
             continue
 
         if event.type == "final" and event.content:
-            lines.append("[final]")
             lines.append(event.content.strip())
             continue
 
         if event.type == "error" and event.content:
-            lines.append(f"[error] {event.content.strip()}")
+            lines.append(f"error: {event.content.strip()}")
 
     return "\n".join(lines).strip()
 
 
 def run_agent_until_stop(agent: AgentLoop, max_steps: int) -> None:
-    steps = 0
-
-    while True:
-        if agent.finished:
-            print("\n[system] 当前 session 已完成。", flush=True)
-            break
-
-        if steps >= max_steps:
-            agent.save_session()
-            print("\n[system] 已达到本轮最大自动步数。", flush=True)
-            break
-
-        try:
-            events = agent.step_once()
-        except Exception as e:
-            agent.save_session()
-            print(f"\n[system] 自动执行失败：{e}", file=sys.stderr, flush=True)
-            break
-
-        rendered = render_events(events)
+    def handle_step(step_events: list[AgentEvent]) -> None:
+        rendered = render_events(step_events)
+        if not rendered:
+            return
         print("\n===== AGENT =====", flush=True)
-        if rendered:
-            print(rendered, flush=True)
-        else:
-            print("(no visible events)", flush=True)
+        print(rendered, flush=True)
 
-        steps += 1
+    result = agent.run_until_stop(max_steps=max_steps, on_step=handle_step)
 
-        if any(event.type == "final" for event in events):
-            break
+    if result.stop_reason == "final":
+        print("\n[system] 当前 session 已完成。", flush=True)
+        return
+
+    if result.stop_reason == "max_steps":
+        print("\n[system] 已达到本轮最大自动步数。", flush=True)
+        return
+
+    print(f"\n[system] 自动执行失败：{result.error_message or 'unknown error'}", file=sys.stderr, flush=True)
 
 
 def choose_chat(chat_memory: ChatMemory) -> Optional[str]:

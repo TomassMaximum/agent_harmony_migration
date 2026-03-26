@@ -546,35 +546,19 @@ def drive_agent_turn(agent: AgentLoop, user_message: str, max_steps: int = MAX_W
         agent.finished = False
 
     agent.inject_user_message(user_message)
+    result = agent.run_until_stop(max_steps=max_steps)
+    grouped_trace = group_events_by_step(result.events)
 
-    all_events: List[AgentEvent] = []
+    if result.stop_reason == "final" and result.final_answer:
+        sys.stderr.write("[drive_agent_turn] stop: final answer detected\n")
+        return result.final_answer, grouped_trace
 
-    for step_idx in range(max_steps):
-        sys.stderr.write(f"[drive_agent_turn] step {step_idx + 1}/{max_steps}\n")
-
-        step_events = agent.step_once()
-        if step_events:
-            all_events.extend(step_events)
-
-        final_text = extract_final_text_from_events(step_events)
-        if final_text:
-            sys.stderr.write("[drive_agent_turn] stop: final answer detected\n")
-            grouped_trace = group_events_by_step(all_events)
-            return final_text, grouped_trace
-
-        if getattr(agent, "finished", False):
-            sys.stderr.write("[drive_agent_turn] stop: agent.finished=True\n")
-            break
-    else:
+    if result.stop_reason == "max_steps":
         sys.stderr.write("[drive_agent_turn] stop: max steps reached\n")
+        return "本轮执行尚未生成最终答复，已在适配层停止。请重试，或换一种更直接的提问方式。", grouped_trace
 
-    final_text = extract_final_text_from_events(all_events)
-    grouped_trace = group_events_by_step(all_events)
-
-    if final_text:
-        return final_text, grouped_trace
-
-    return "本轮执行尚未生成最终答复，已在适配层停止。请重试，或换一种更直接的提问方式。", grouped_trace
+    sys.stderr.write(f"[drive_agent_turn] stop: error={result.error_message}\n")
+    return f"本轮执行失败：{result.error_message or 'unknown error'}", grouped_trace
 
 
 def stream_agent_turn(agent: AgentLoop, user_message: str, max_steps: int = MAX_WEB_STEPS):
