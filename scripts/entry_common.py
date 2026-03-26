@@ -19,12 +19,14 @@ def build_agent(
     max_steps: Optional[int] = None,
     root: Optional[str] = None,
     chat_id: Optional[str] = None,
+    permission_approval_handler=None,
 ) -> AgentLoop:
     return AgentLoop(
         model=model,
         max_steps=max_steps,
         root=root,
         chat_id=chat_id,
+        permission_approval_handler=permission_approval_handler,
     )
 
 

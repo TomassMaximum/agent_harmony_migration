@@ -60,6 +60,10 @@ class PermissionManager:
         self.allowed_write_roots.add(grant_root)
         self._save()
 
+    def grant_write_accesses(self, paths: List[str]) -> None:
+        for path in paths:
+            self.grant_write_access(path)
+
     def describe_allowed_write_roots(self) -> str:
         if not self.allowed_write_roots:
             return "(none)"

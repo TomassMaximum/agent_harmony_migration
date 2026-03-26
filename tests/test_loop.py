@@ -118,6 +118,27 @@ class AgentLoopStopReasonTest(unittest.TestCase):
         self.assertIn("/tmp/hm-agent-outside.txt", result.error_message)
         self.assertEqual(result.step_count, 1)
 
+    def test_permission_approval_handler_grants_and_continues(self) -> None:
+        approved = []
+
+        def permission_handler(command, cwd, decision):
+            approved.append((command, tuple(decision.requested_paths)))
+            return True
+
+        agent = self.make_agent()
+        agent.permission_approval_handler = permission_handler
+        agent.llm.chat = lambda _req: ChatResponse(
+            model="x",
+            content='{"thought":"x","action":"tool","tool_name":"run_command","tool_args":{"command":"touch /tmp/hm-agent-approved.txt"},"final_answer":""}',
+            raw={},
+        )
+
+        result = agent.run_until_stop(max_steps=1)
+
+        self.assertEqual(result.stop_reason, "max_steps")
+        self.assertTrue(approved)
+        self.assertTrue(agent.permissions.is_within_allowed_write_roots("/tmp/hm-agent-approved.txt"))
+
 
 if __name__ == "__main__":
     unittest.main()

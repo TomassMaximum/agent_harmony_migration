@@ -38,8 +38,9 @@
 - 还没有 `Analyze -> Design -> Implement -> Review` 的阶段编排
 - 权限策略目前是最小可控版本：
   - 只读命令默认允许
-  - `run_command` 的工作区外路径修改会被阻断
-  - 不支持运行中交互授权
+  - `run_command` 的工作区外路径修改会先申请授权
+  - CLI 中用户同意后会永久写入授权配置
+  - Web 中可通过 `/approve <path>` 做永久授权
 
 ## 快速开始
 
@@ -55,10 +56,23 @@ export DEEPSEEK_API_KEY="你的 key"
 python3 scripts/chat_agent.py "先分析当前工程结构"
 ```
 
+权限相关命令：
+
+```bash
+/permissions
+/approve /path/to/allow
+```
+
 ### 3. 启动 Web 适配层
 
 ```bash
 python3 scripts/openai_adapter.py
+```
+
+如果 Web 请求被权限阻塞，可发送：
+
+```text
+/approve /path/to/allow
 ```
 
 ## 文档

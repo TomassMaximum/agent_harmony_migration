@@ -9,7 +9,7 @@ from typing import Any, Callable, Dict, Generator, List, Optional
 from .llm import DeepSeekLLM
 from .memory import SessionMemory
 from .chat_memory import ChatMemory
-from .permissions import PermissionManager
+from .permissions import PermissionDecision, PermissionManager
 from .prompts import (
     AGENT_SYSTEM_PROMPT,
     CHAT_SUMMARY_SYSTEM_PROMPT,
@@ -38,6 +38,7 @@ class AgentLoop:
         root: str = None,
         session_id: str = None,
         chat_id: str = None,
+        permission_approval_handler: Optional[Callable[[str, Optional[str], PermissionDecision], bool]] = None,
     ) -> None:
         self.model = model if model is not None else config.get("agent.model", "deepseek-chat")
         self.max_steps = max_steps if max_steps is not None else config.get("agent.max_steps", 80)
@@ -60,6 +61,7 @@ class AgentLoop:
         self.session_started = False
         self.finished = False
         self.pause_requested = False
+        self.permission_approval_handler = permission_approval_handler
 
         self.lock = threading.RLock()
 
@@ -568,6 +570,17 @@ class AgentLoop:
         if decision.allowed:
             return None
 
+        if decision.requires_user_approval:
+            approved = self._ask_user_for_permission(
+                command=command,
+                cwd=cwd,
+                requested_paths=decision.requested_paths,
+                reason=decision.reason,
+            )
+            if approved:
+                self.permissions.grant_write_accesses(decision.requested_paths)
+                return None
+
         blocked_paths = "\n".join(f"- {path}" for path in decision.requested_paths)
         blocked_paths_text = blocked_paths if blocked_paths else "- (unknown)"
 
@@ -577,7 +590,8 @@ class AgentLoop:
             f"reason: {decision.reason}\n"
             "blocked_paths:\n"
             f"{blocked_paths_text}\n"
-            "当前策略：只读命令默认允许；工作区内写入允许；工作区外写入阻断。"
+            "当前策略：只读命令默认允许；工作区内写入允许；工作区外写入需要用户授权。\n"
+            "CLI 会直接询问是否授权；Web 可发送 /approve <path> 做永久授权。"
         )
 
     def _ask_user_for_permission(
@@ -587,8 +601,17 @@ class AgentLoop:
         requested_paths: List[str],
         reason: str,
     ) -> bool:
-        # 当前仅支持自动阻断，不支持运行中交互授权。
-        return False
+        if self.permission_approval_handler is None:
+            return False
+        try:
+            return bool(self.permission_approval_handler(command, cwd, PermissionDecision(
+                allowed=False,
+                reason=reason,
+                requires_user_approval=True,
+                requested_paths=requested_paths,
+            )))
+        except Exception:
+            return False
 
     def _parse_json(self, text: str) -> Dict[str, Any]:
         text = text.strip()

@@ -88,6 +88,29 @@ def normalize_user_text(text: str) -> str:
     return text
 
 
+def is_permission_command(text: str) -> bool:
+    normalized = normalize_user_text(text)
+    return normalized.startswith("/approve ") or normalized == "/permissions"
+
+
+def handle_permission_command(agent: AgentLoop, text: str) -> str:
+    normalized = normalize_user_text(text)
+
+    if normalized == "/permissions":
+        return agent.permissions.describe_allowed_write_roots()
+
+    raw_path = normalized[len("/approve "):].strip()
+    if not raw_path:
+        return "用法：/approve <path>"
+
+    agent.permissions.grant_write_access(raw_path)
+    return (
+        f"已永久授权路径：{raw_path}\n\n"
+        "当前永久授权路径：\n"
+        f"{agent.permissions.describe_allowed_write_roots()}"
+    )
+
+
 def get_last_user_message(messages: list) -> str:
     for msg in reversed(messages):
         if msg.get("role") == "user":
@@ -419,6 +442,54 @@ def create_chat_completion():
     # ---------- B. Normal chat requests ----------
     try:
         agent = ensure_agent(conversation_key)
+
+        if is_permission_command(user_content):
+            assistant_content = handle_permission_command(agent, user_content)
+            trace_payload = []
+            if stream:
+                chunk_id = f"chatcmpl-{uuid.uuid4()}"
+
+                def gen():
+                    yield sse_chunk(make_chunk(chunk_id, assistant_content))
+                    yield sse_chunk(make_chunk(chunk_id, finish_reason="stop"))
+                    yield "data: [DONE]\n\n"
+
+                return Response(
+                    stream_with_context(gen()),
+                    mimetype="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "X-Accel-Buffering": "no",
+                        "Connection": "keep-alive",
+                        "X-Conversation-Key": conversation_key,
+                    },
+                )
+            completion = {
+                "id": f"chatcmpl-{uuid.uuid4()}",
+                "object": "chat.completion",
+                "created": now_ts(),
+                "model": ADAPTER_MODEL_NAME,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {
+                            "role": "assistant",
+                            "content": assistant_content,
+                        },
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {
+                    "prompt_tokens": 0,
+                    "completion_tokens": 0,
+                    "total_tokens": 0,
+                },
+                "conversation_key": conversation_key,
+                "trace": trace_payload,
+            }
+            resp = jsonify(completion)
+            resp.headers["X-Conversation-Key"] = conversation_key
+            return resp
 
         if stream:
             return Response(

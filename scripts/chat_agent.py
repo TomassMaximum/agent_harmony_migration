@@ -11,6 +11,7 @@ import config
 
 from agent.loop import AgentLoop
 from agent.chat_memory import ChatMemory
+from agent.permissions import PermissionDecision
 from entry_common import (
     build_agent,
     render_cli_step_text,
@@ -31,6 +32,21 @@ def prompt_required_task(prompt_text: str) -> str:
     if not task:
         raise ValueError("必须显式输入初始任务。")
     return task
+
+
+def prompt_permission_approval(command: str, cwd: Optional[str], decision: PermissionDecision) -> bool:
+    print("\n===== PERMISSION REQUEST =====", flush=True)
+    print("检测到工作区外写入命令，需要你的授权。", flush=True)
+    print(f"command: {command or '(empty)'}", flush=True)
+    if cwd:
+        print(f"cwd: {cwd}", flush=True)
+    print(f"reason: {decision.reason}", flush=True)
+    print("paths:", flush=True)
+    for path in decision.requested_paths:
+        print(f"- {path}", flush=True)
+
+    choice = input("是否永久授权以上路径给 agent？[y/N]: ").strip().lower()
+    return choice in {"y", "yes"}
 
 
 def drive_cli_session_until_stop(agent: AgentLoop, max_steps: int, user_message: Optional[str] = None) -> None:
@@ -129,6 +145,7 @@ def main() -> None:
         max_steps=args.max_steps,
         root=args.root,
         chat_id=selected_chat_id,
+        permission_approval_handler=prompt_permission_approval,
     )
 
     def finalize_before_switch():
@@ -143,6 +160,8 @@ def main() -> None:
     print("输入 /exit 退出")
     print("输入 /save 手动保存并更新摘要")
     print("输入 /state 查看当前 session 状态")
+    print("输入 /permissions 查看当前永久授权路径")
+    print("输入 /approve <path> 永久授权某个路径")
     print("输入 /reset 重置当前 session（仍挂在当前 chat 下）")
     print("输入 /newchat 切换到一个新 chat")
     print("输入普通消息后，agent 会自动连续执行直到完成或达到步数上限")
@@ -193,6 +212,20 @@ def main() -> None:
             print(f"finished：{agent.finished}")
             continue
 
+        if user_input == "/permissions":
+            print(agent.permissions.describe_allowed_write_roots())
+            continue
+
+        if user_input.startswith("/approve "):
+            raw_path = user_input[len("/approve "):].strip()
+            if not raw_path:
+                print("[system] 用法：/approve <path>")
+                continue
+            agent.permissions.grant_write_access(raw_path)
+            print(f"[system] 已永久授权路径：{raw_path}")
+            print(agent.permissions.describe_allowed_write_roots())
+            continue
+
         if user_input == "/reset":
             try:
                 new_task = prompt_required_task("请输入新的初始任务：")
@@ -202,6 +235,7 @@ def main() -> None:
                     max_steps=args.max_steps,
                     root=args.root,
                     chat_id=agent.chat_id,
+                    permission_approval_handler=prompt_permission_approval,
                 )
                 start_new_session(agent, new_task, inject_current_chat_memory=True)
                 print("[system] 已重置当前 session，默认继续执行。")
@@ -222,6 +256,7 @@ def main() -> None:
                     max_steps=args.max_steps,
                     root=args.root,
                     chat_id=new_chat_id,
+                    permission_approval_handler=prompt_permission_approval,
                 )
                 start_new_session(agent, new_task, inject_current_chat_memory=True)
                 print(f"[system] 已创建新 chat: {agent.chat_id}")

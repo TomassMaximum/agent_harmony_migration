@@ -107,6 +107,18 @@ python3 scripts/chat_agent.py "先分析当前工程结构" \
   --root .
 ```
 
+权限相关命令：
+
+```bash
+/permissions
+/approve /path/to/allow
+```
+
+说明：
+
+- 当 agent 首次尝试执行工作区外写入命令时，CLI 会直接询问是否永久授权
+- 同意后，授权路径会写入工作区下的 `.hm_agent_permissions.json`
+
 ### Web 适配层
 
 ```bash
@@ -121,6 +133,21 @@ export HM_AGENT_WEB_HOST="127.0.0.1"
 export HM_AGENT_WEB_PORT="5001"
 export HM_AGENT_WEB_DEBUG="false"
 export HM_AGENT_WEB_MAX_STEPS="12"
+```
+
+权限说明：
+
+- Web 请求无法在同一 HTTP 请求中弹出交互式确认
+- 如果权限被阻塞，可在对话中发送：
+
+```text
+/approve /path/to/allow
+```
+
+- 查看当前永久授权路径：
+
+```text
+/permissions
 ```
 
 ## 常见问题

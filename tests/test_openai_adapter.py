@@ -8,7 +8,9 @@ from agent.events import TraceStepView
 from scripts.entry_common import compose_web_response
 from scripts.openai_adapter import (
     derive_fallback_conversation_key,
+    handle_permission_command,
     get_first_real_user_message,
+    is_permission_command,
     handle_openwebui_meta_request,
     is_openwebui_meta_request,
     normalize_user_text,
@@ -41,6 +43,28 @@ class OpenAIAdapterPureFunctionTest(unittest.TestCase):
         self.assertTrue(is_openwebui_meta_request(prompt))
         response = handle_openwebui_meta_request(prompt)
         self.assertIn("你能总结一下刚才这段对话吗？", response)
+
+    def test_permission_command_helpers(self) -> None:
+        class DummyPermissions:
+            def __init__(self):
+                self.granted = []
+
+            def grant_write_access(self, path):
+                self.granted.append(path)
+
+            def describe_allowed_write_roots(self):
+                return "\n".join(self.granted) if self.granted else "(none)"
+
+        class DummyAgent:
+            def __init__(self):
+                self.permissions = DummyPermissions()
+
+        agent = DummyAgent()
+        self.assertTrue(is_permission_command("/approve /tmp/demo"))
+        self.assertTrue(is_permission_command("/permissions"))
+        reply = handle_permission_command(agent, "/approve /tmp/demo")
+        self.assertIn("/tmp/demo", reply)
+        self.assertEqual(handle_permission_command(agent, "/permissions"), "/tmp/demo")
 
     def test_compose_web_response_appends_trace_markdown(self) -> None:
         trace = [
