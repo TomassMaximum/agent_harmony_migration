@@ -6,7 +6,17 @@ from typing import List, Optional, Set
 
 
 PATH_MUTATING_COMMANDS = {
-    "rm", "mv"
+    "rm",
+    "mv",
+    "cp",
+    "ln",
+    "mkdir",
+    "rmdir",
+    "touch",
+    "truncate",
+    "tee",
+    "chmod",
+    "chown",
 }
 
 

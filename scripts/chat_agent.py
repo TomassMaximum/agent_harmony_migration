@@ -96,7 +96,10 @@ def choose_chat(chat_memory: ChatMemory) -> Optional[str]:
 
 def main() -> None:
     default_model = config.get("agent.model", "deepseek-chat")
-    default_max_steps = config.get("agent.max_steps", 80)
+    default_max_steps = config.get(
+        "scripts.chat_agent.default_max_steps",
+        config.get("agent.max_steps", 80),
+    )
     default_root = config.get("agent.root", ".")
 
     parser = argparse.ArgumentParser(description="Interactive agent session")

@@ -38,7 +38,7 @@ from flask import Flask, request, jsonify, Response, stream_with_context
 CONFIG = config.get
 HOST = CONFIG("web.host", "0.0.0.0")
 PORT = CONFIG("web.port", 5001)
-DEBUG = False
+DEBUG = bool(CONFIG("web.debug", False))
 
 CHAT_STORAGE_PATH = CONFIG("agent.chat_storage_path", "./chats")
 SESSION_STORAGE_PATH = CONFIG("agent.session_storage_path", "./sessions")

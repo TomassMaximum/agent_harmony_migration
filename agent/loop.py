@@ -556,8 +556,29 @@ class AgentLoop:
         }
 
     def _maybe_request_permission(self, tool_name: str, tool_args: Dict[str, Any]) -> Optional[str]:
-        # TEMP: disable all permission blocking
-        return None
+        if tool_name != "run_command":
+            return None
+
+        command = str(tool_args.get("command", "")).strip()
+        cwd = tool_args.get("cwd")
+        if cwd is not None:
+            cwd = str(cwd)
+
+        decision = self.permissions.check_run_command(command, cwd)
+        if decision.allowed:
+            return None
+
+        blocked_paths = "\n".join(f"- {path}" for path in decision.requested_paths)
+        blocked_paths_text = blocked_paths if blocked_paths else "- (unknown)"
+
+        return (
+            "权限阻塞：检测到工作区外路径修改命令，当前入口已阻止执行。\n"
+            f"command: {command or '(empty)'}\n"
+            f"reason: {decision.reason}\n"
+            "blocked_paths:\n"
+            f"{blocked_paths_text}\n"
+            "当前策略：只读命令默认允许；工作区内写入允许；工作区外写入阻断。"
+        )
 
     def _ask_user_for_permission(
         self,
@@ -566,8 +587,8 @@ class AgentLoop:
         requested_paths: List[str],
         reason: str,
     ) -> bool:
-        # TEMP: always allow
-        return True
+        # 当前仅支持自动阻断，不支持运行中交互授权。
+        return False
 
     def _parse_json(self, text: str) -> Dict[str, Any]:
         text = text.strip()
