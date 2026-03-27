@@ -1,17 +1,35 @@
 {
   "agent": {
-    "model": "deepseek-chat",
     "max_steps": 80,
     "root": ".",
     "session_storage_path": "./sessions",
     "chat_storage_path": "./chats"
   },
   "llm": {
-    "api_key": "",
-    "base_url": "https://api.deepseek.com/chat/completions",
-    "timeout": 120,
-    "temperature": null,
-    "max_tokens": null
+    "current": "qwen",
+    "providers": {
+      "deepseek": {
+        "provider": "deepseek",
+        "model": "deepseek-chat",
+        "api_key": "sk-fc2ce31582c24c21b86b3c105c36affd",
+        "base_url": "https://api.deepseek.com/chat/completions",
+        "timeout": 120
+      },
+      "openai": {
+        "provider": "openai",
+        "model": "gpt-4.1",
+        "api_key": "",
+        "base_url": "",
+        "timeout": 120
+      },
+      "qwen": {
+        "provider": "qwen",
+        "model": "qwen-plus",
+        "api_key": "sk-3d05661246234728b92aedbf4d2bb4ea",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "timeout": 120
+      }
+    }
   },
   "tools": {
     "run_command": {

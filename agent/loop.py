@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Callable, Dict, Generator, List, Optional
 
-from .llm import DeepSeekLLM
+from .llm import create_llm
 from .memory import SessionMemory
 from .chat_memory import ChatMemory
 from .permissions import PermissionDecision, PermissionManager
@@ -33,6 +33,8 @@ import config
 class AgentLoop:
     def __init__(
         self,
+        llm_name: str = None,
+        provider: str = None,
         model: str = None,
         max_steps: int = None,
         root: str = None,
@@ -40,11 +42,14 @@ class AgentLoop:
         chat_id: str = None,
         permission_approval_handler: Optional[Callable[[str, Optional[str], PermissionDecision], bool]] = None,
     ) -> None:
-        self.model = model if model is not None else config.get("agent.model", "deepseek-chat")
+        llm_config = config.get_llm_config(llm_name)
+        self.llm_name = llm_config["name"]
+        self.provider = provider if provider is not None else llm_config.get("provider", "deepseek")
+        self.model = model if model is not None else llm_config.get("model", "deepseek-chat")
         self.max_steps = max_steps if max_steps is not None else config.get("agent.max_steps", 80)
         self.root = os.path.abspath(root if root is not None else config.get("agent.root", "."))
 
-        self.llm = DeepSeekLLM()
+        self.llm = create_llm(llm_name=self.llm_name, provider=self.provider)
         self.registry = build_tool_registry()
         self.permissions = PermissionManager(self.root)
 
@@ -415,6 +420,33 @@ class AgentLoop:
         chat_meta = self._build_chat_summary(session_summaries)
         self.chat_memory.save_chat_meta(chat_id, chat_meta)
 
+    def _normalize_action_payload(self, action_obj: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(action_obj or {})
+        action = str(normalized.get("action") or "").strip()
+        tool_name = str(normalized.get("tool_name") or "").strip()
+
+        if action == "final":
+            normalized["action"] = "final"
+            return normalized
+
+        if action == "tool":
+            normalized["action"] = "tool"
+            return normalized
+
+        # 兼容部分模型直接把 action 输出成工具名。
+        if action in self.registry:
+            normalized["action"] = "tool"
+            if not tool_name:
+                normalized["tool_name"] = action
+            return normalized
+
+        # 兼容 action 缺失但 tool_name 正常的情况。
+        if not action and tool_name in self.registry:
+            normalized["action"] = "tool"
+            return normalized
+
+        return normalized
+
     def step_once(self) -> List[AgentEvent]:
         with self.lock:
             if not self.session_started:
@@ -442,6 +474,8 @@ class AgentLoop:
             action_obj = self._parse_json(raw_text)
         except Exception as e:
             raise InvalidModelOutputError(str(e)) from e
+
+        action_obj = self._normalize_action_payload(action_obj)
 
         action = action_obj.get("action")
         thought = (action_obj.get("thought") or "").strip()

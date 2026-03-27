@@ -6,6 +6,7 @@ from unittest.mock import patch
 from agent.custom_types import ChatResponse
 from agent.events import AgentEvent
 from agent.loop import AgentLoop
+from tools.base import ToolResult
 
 
 class FakeLLM:
@@ -21,23 +22,30 @@ class AgentLoopStopReasonTest(unittest.TestCase):
         self.chat_path = os.path.join(self.root, "chats")
         self.session_path = os.path.join(self.root, "sessions")
 
-        patcher = patch("agent.loop.DeepSeekLLM", return_value=FakeLLM())
+        patcher = patch("agent.loop.create_llm", return_value=FakeLLM())
         self.mock_llm_cls = patcher.start()
         self.addCleanup(patcher.stop)
 
     def make_agent(self) -> AgentLoop:
-        with patch("config.get") as mock_get:
+        with patch("config.get") as mock_get, patch("config.get_llm_config") as mock_get_llm_config:
             def fake_get(key, default=None):
                 mapping = {
                     "agent.session_storage_path": self.session_path,
                     "agent.chat_storage_path": self.chat_path,
                     "agent.root": self.root,
                     "agent.max_steps": 5,
-                    "agent.model": "deepseek-chat",
                 }
                 return mapping.get(key, default)
 
             mock_get.side_effect = fake_get
+            mock_get_llm_config.return_value = {
+                "name": "deepseek",
+                "provider": "deepseek",
+                "model": "deepseek-chat",
+                "api_key": "test-key",
+                "base_url": "",
+                "timeout": 120,
+            }
             agent = AgentLoop(root=self.root, max_steps=5)
             agent.start_session("test task", load_existing=False, inject_current_chat_memory=False)
             return agent
@@ -102,6 +110,32 @@ class AgentLoopStopReasonTest(unittest.TestCase):
         self.assertEqual(result.stop_reason, "tool_error")
         self.assertIn("工具 list_dir 执行异常", result.error_message)
         self.assertEqual(result.step_count, 1)
+
+    def test_run_until_stop_accepts_action_as_tool_name(self) -> None:
+        agent = self.make_agent()
+        agent.llm.chat = lambda _req: ChatResponse(
+            model="x",
+            content='{"thought":"x","action":"list_dir","tool_name":"list_dir","tool_args":{"path":"."},"final_answer":""}',
+            raw={},
+        )
+        agent.registry["list_dir"].run = lambda **kwargs: ToolResult(ok=True, content="done", meta={})
+
+        result = agent.run_until_stop(max_steps=1)
+
+        self.assertEqual(result.stop_reason, "max_steps")
+
+    def test_run_until_stop_accepts_missing_action_when_tool_name_present(self) -> None:
+        agent = self.make_agent()
+        agent.llm.chat = lambda _req: ChatResponse(
+            model="x",
+            content='{"thought":"x","tool_name":"list_dir","tool_args":{"path":"."},"final_answer":""}',
+            raw={},
+        )
+        agent.registry["list_dir"].run = lambda **kwargs: ToolResult(ok=True, content="done", meta={})
+
+        result = agent.run_until_stop(max_steps=1)
+
+        self.assertEqual(result.stop_reason, "max_steps")
 
     def test_run_until_stop_permission_blocked(self) -> None:
         agent = self.make_agent()

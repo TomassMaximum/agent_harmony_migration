@@ -111,7 +111,7 @@ def choose_chat(chat_memory: ChatMemory) -> Optional[str]:
 
 
 def main() -> None:
-    default_model = config.get("agent.model", "deepseek-chat")
+    current_llm = config.get_current_llm_config()
     default_max_steps = config.get(
         "scripts.chat_agent.default_max_steps",
         config.get("agent.max_steps", 80),
@@ -120,7 +120,6 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Interactive agent session")
     parser.add_argument("task", help="初始任务")
-    parser.add_argument("--model", default=default_model)
     parser.add_argument("--max-steps", type=int, default=default_max_steps)
     parser.add_argument("--root", default=default_root)
     parser.add_argument("--chat-id", default=None, help="直接指定 chat_id")
@@ -141,7 +140,6 @@ def main() -> None:
         print(f"[system] 已选择恢复 chat: {selected_chat_id}")
 
     agent = build_agent(
-        model=args.model,
         max_steps=args.max_steps,
         root=args.root,
         chat_id=selected_chat_id,
@@ -157,6 +155,10 @@ def main() -> None:
 
     print("===== START SESSION =====")
     print(f"workspace: {root_path}")
+    print(
+        f"llm: {current_llm['name']} "
+        f"(provider={current_llm['provider']}, model={current_llm['model']})"
+    )
     print("输入 /exit 退出")
     print("输入 /save 手动保存并更新摘要")
     print("输入 /state 查看当前 session 状态")
@@ -231,7 +233,6 @@ def main() -> None:
                 new_task = prompt_required_task("请输入新的初始任务：")
                 finalize_before_switch()
                 agent = build_agent(
-                    model=args.model,
                     max_steps=args.max_steps,
                     root=args.root,
                     chat_id=agent.chat_id,
@@ -252,7 +253,6 @@ def main() -> None:
                 finalize_before_switch()
                 new_chat_id = chat_memory.create_chat()
                 agent = build_agent(
-                    model=args.model,
                     max_steps=args.max_steps,
                     root=args.root,
                     chat_id=new_chat_id,

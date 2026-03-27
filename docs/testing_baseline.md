@@ -63,7 +63,30 @@ python3 -m py_compile scripts/*.py agent/*.py tools/*.py config.py tests/*.py
 
 说明：
 
-- 这里通过 mock `DeepSeekLLM` 和局部替换 `step_once()` / `tool.run()`，避免真实网络调用
+- 这里通过 mock `create_llm()` 和局部替换 `step_once()` / `tool.run()`，避免真实网络调用
+
+### `tests/test_llm.py`
+
+覆盖：
+
+- `agent/llm.py`
+
+验证点：
+
+- provider alias 归一化
+- provider 缺少 `base_url` 的报错
+- `openai_compatible` 缺少 `base_url` 的报错
+
+### `tests/test_config.py`
+
+覆盖：
+
+- `config.py`
+
+验证点：
+
+- `llm.current` 切换后会写回 `config.json`
+- 旧版单一 `llm` 配置可自动迁移为新的 `llm.providers` 结构
 
 ### `tests/test_openai_adapter.py`
 
@@ -84,7 +107,7 @@ python3 -m py_compile scripts/*.py agent/*.py tools/*.py config.py tests/*.py
 当前基线测试通过时，典型输出应为：
 
 ```text
-Ran 18 tests in ...
+Ran 20+ tests in ...
 
 OK
 ```

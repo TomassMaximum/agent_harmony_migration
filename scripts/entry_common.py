@@ -15,6 +15,8 @@ from agent.loop import AgentLoop
 
 
 def build_agent(
+    llm_name: Optional[str] = None,
+    provider: Optional[str] = None,
     model: Optional[str] = None,
     max_steps: Optional[int] = None,
     root: Optional[str] = None,
@@ -22,6 +24,8 @@ def build_agent(
     permission_approval_handler=None,
 ) -> AgentLoop:
     return AgentLoop(
+        llm_name=llm_name,
+        provider=provider,
         model=model,
         max_steps=max_steps,
         root=root,

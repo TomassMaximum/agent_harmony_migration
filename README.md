@@ -44,13 +44,22 @@
 
 ## 快速开始
 
-### 1. 配置 API Key
+### 1. 查看当前 LLM
 
 ```bash
-export DEEPSEEK_API_KEY="你的 key"
+python3 scripts/llm_provider.py which
 ```
 
-### 2. 启动交互式 CLI
+### 2. 如有需要，切换当前 LLM
+
+```bash
+python3 scripts/llm_provider.py ls
+python3 scripts/llm_provider.py checkout deepseek
+```
+
+LLM 的 `model`、`api_key`、`base_url` 都统一写在 [config.json](/Users/weibaoping/agent/ohos_migration/ohmv1/hm_agent/config.json)。
+
+### 3. 启动交互式 CLI
 
 ```bash
 python3 scripts/chat_agent.py "先分析当前工程结构"
@@ -63,7 +72,7 @@ python3 scripts/chat_agent.py "先分析当前工程结构"
 /approve /path/to/allow
 ```
 
-### 3. 启动 Web 适配层
+### 4. 启动 Web 适配层
 
 ```bash
 python3 scripts/openai_adapter.py
