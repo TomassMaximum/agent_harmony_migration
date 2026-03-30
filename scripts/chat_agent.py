@@ -3,8 +3,14 @@
 
 import argparse
 import os
+import shutil
+import subprocess
 import sys
+import tempfile
 from typing import Optional
+import shlex
+
+from prompt_toolkit import PromptSession
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import config
@@ -19,19 +25,111 @@ from entry_common import (
     start_new_session,
 )
 
-
-def require_initial_task(cli_task: str) -> str:
-    task = (cli_task or "").strip()
-    if task:
-        return task
-    raise ValueError("必须显式提供初始任务。请使用: python3 scripts/chat_agent.py \"你的任务\"")
+SINGLE_LINE_SESSION = PromptSession()
 
 
-def prompt_required_task(prompt_text: str) -> str:
-    task = input(prompt_text).strip()
-    if not task:
-        raise ValueError("必须显式输入初始任务。")
-    return task
+def prompt_input(prompt_text: str) -> str:
+    return SINGLE_LINE_SESSION.prompt(prompt_text)
+
+
+def choose_editor() -> Optional[list]:
+    """
+    选择可用编辑器，返回 subprocess 可执行命令列表。
+    优先级：
+    1. VISUAL
+    2. EDITOR
+    3. code -w
+    4. nano
+    5. vim
+    6. vi
+    """
+    env_visual = os.environ.get("VISUAL", "").strip()
+    if env_visual:
+        return shlex.split(env_visual)
+
+    env_editor = os.environ.get("EDITOR", "").strip()
+    if env_editor:
+        return shlex.split(env_editor)
+
+    if shutil.which("code"):
+        return ["code", "-w"]
+
+    for name in ("nano", "vim", "vi"):
+        if shutil.which(name):
+            return [name]
+
+    return None
+
+
+def open_external_editor(initial_text: str = "") -> str:
+    """
+    打开外部编辑器，返回编辑后的文本。
+    若没有可用编辑器，抛出 RuntimeError。
+    """
+    editor_cmd = choose_editor()
+    if not editor_cmd:
+        raise RuntimeError(
+            "未找到可用编辑器。请先设置 $EDITOR 或安装 code/nano/vim。"
+        )
+
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", suffix=".md", delete=False
+        ) as f:
+            temp_path = f.name
+            if initial_text:
+                f.write(initial_text)
+            else:
+                f.write(
+                    "<!-- 在这里输入内容。保存并关闭编辑器后，将自动发送给 agent。 -->\n\n"
+                )
+
+        subprocess.run(editor_cmd + [temp_path], check=True)
+
+        with open(temp_path, "r", encoding="utf-8") as f:
+            content = f.read()
+
+        lines = []
+        for line in content.splitlines():
+            stripped = line.strip()
+            if stripped.startswith("<!--") and stripped.endswith("-->"):
+                continue
+            lines.append(line)
+
+        return "\n".join(lines).strip()
+
+    finally:
+        if temp_path and os.path.exists(temp_path):
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+
+
+def prompt_task_or_edit(prompt_text: str) -> str:
+    """
+    获取任务/消息输入：
+    - 普通单行输入：直接返回
+    - /edit：打开外部编辑器
+    """
+    while True:
+        raw = prompt_input(prompt_text).strip()
+        if raw == "/edit":
+            try:
+                content = open_external_editor()
+            except Exception as e:
+                print(f"[system] 打开外部编辑器失败：{e}", file=sys.stderr)
+                continue
+            if not content:
+                print("[system] 编辑器内容为空，请重新输入。")
+                continue
+            return content
+
+        if raw:
+            return raw
+
+        print("[system] 输入不能为空。你可以直接输入一行文字，或输入 /edit 打开编辑器。")
 
 
 def prompt_permission_approval(command: str, cwd: Optional[str], decision: PermissionDecision) -> bool:
@@ -45,7 +143,7 @@ def prompt_permission_approval(command: str, cwd: Optional[str], decision: Permi
     for path in decision.requested_paths:
         print(f"- {path}", flush=True)
 
-    choice = input("是否永久授权以上路径给 agent？[y/N]: ").strip().lower()
+    choice = prompt_input("是否永久授权以上路径给 agent？[y/N]: ").strip().lower()
     return choice in {"y", "yes"}
 
 
@@ -95,7 +193,7 @@ def choose_chat(chat_memory: ChatMemory) -> Optional[str]:
         if short_summary:
             print(f"   {short_summary}")
 
-    choice = input("请输入要恢复的 chat 编号（直接回车表示新建 chat）：").strip()
+    choice = prompt_input("请输入要恢复的 chat 编号（直接回车表示新建 chat）：").strip()
     if not choice:
         return None
 
@@ -110,6 +208,25 @@ def choose_chat(chat_memory: ChatMemory) -> Optional[str]:
     return None
 
 
+def build_initial_task() -> str:
+    print("\n===== INITIAL TASK =====")
+    print("请输入初始任务。")
+    print("你可以：")
+    print("- 直接输入一行文字后回车")
+    print("- 输入 /edit 打开外部编辑器编写长内容")
+    return prompt_task_or_edit("> ")
+
+
+def build_user_message() -> str:
+    print("\n===== YOU =====")
+    print("请输入消息。")
+    print("你可以：")
+    print("- 直接输入一行文字后回车发送")
+    print("- 输入 /edit 打开外部编辑器编写长内容")
+    print("- 输入命令：/exit /save /state /permissions /approve <path> /reset /newchat")
+    return prompt_task_or_edit("> ")
+
+
 def main() -> None:
     current_llm = config.get_current_llm_config()
     default_max_steps = config.get(
@@ -119,14 +236,12 @@ def main() -> None:
     default_root = config.get("agent.root", ".")
 
     parser = argparse.ArgumentParser(description="Interactive agent session")
-    parser.add_argument("task", help="初始任务")
     parser.add_argument("--max-steps", type=int, default=default_max_steps)
     parser.add_argument("--root", default=default_root)
     parser.add_argument("--chat-id", default=None, help="直接指定 chat_id")
     args = parser.parse_args()
 
     root_path = os.path.abspath(args.root)
-    task_content = require_initial_task(args.task)
 
     chat_storage_path = config.get("agent.chat_storage_path", "./chats")
     session_storage_path = config.get("agent.session_storage_path", "./sessions")
@@ -138,6 +253,8 @@ def main() -> None:
         print(f"[system] 已创建新 chat: {selected_chat_id}")
     else:
         print(f"[system] 已选择恢复 chat: {selected_chat_id}")
+
+    initial_task = build_initial_task()
 
     agent = build_agent(
         max_steps=args.max_steps,
@@ -166,11 +283,11 @@ def main() -> None:
     print("输入 /approve <path> 永久授权某个路径")
     print("输入 /reset 重置当前 session（仍挂在当前 chat 下）")
     print("输入 /newchat 切换到一个新 chat")
-    print("输入普通消息后，agent 会自动连续执行直到完成或达到步数上限")
+    print("输入 /edit 打开外部编辑器编写长文本")
     print()
 
     try:
-        start_new_session(agent, task_content, inject_current_chat_memory=True)
+        start_new_session(agent, initial_task, inject_current_chat_memory=True)
 
         print(f"[system] 当前 chat_id: {agent.chat_id}")
         print(f"[system] 当前 session_id: {agent.session_id}")
@@ -183,7 +300,7 @@ def main() -> None:
 
     while True:
         try:
-            user_input = input("\n===== YOU =====\n").strip()
+            user_input = build_user_message().strip()
         except (EOFError, KeyboardInterrupt):
             print("\n会话结束。")
             finalize_before_switch()
@@ -230,7 +347,7 @@ def main() -> None:
 
         if user_input == "/reset":
             try:
-                new_task = prompt_required_task("请输入新的初始任务：")
+                new_task = build_initial_task()
                 finalize_before_switch()
                 agent = build_agent(
                     max_steps=args.max_steps,
@@ -249,9 +366,9 @@ def main() -> None:
 
         if user_input == "/newchat":
             try:
-                new_task = prompt_required_task("请输入新的初始任务：")
                 finalize_before_switch()
                 new_chat_id = chat_memory.create_chat()
+                new_task = build_initial_task()
                 agent = build_agent(
                     max_steps=args.max_steps,
                     root=args.root,
