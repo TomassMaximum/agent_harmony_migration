@@ -4,6 +4,7 @@ import unittest
 from unittest.mock import patch
 
 from agent.custom_types import ChatResponse
+from agent.custom_types import Message
 from agent.events import AgentEvent
 from agent.loop import AgentLoop
 from tools.base import ToolResult
@@ -172,6 +173,53 @@ class AgentLoopStopReasonTest(unittest.TestCase):
         self.assertEqual(result.stop_reason, "max_steps")
         self.assertTrue(approved)
         self.assertTrue(agent.permissions.is_within_allowed_write_roots("/tmp/hm-agent-approved.txt"))
+
+    def test_load_chat_merges_all_sessions_and_reuses_latest_session(self) -> None:
+        agent = self.make_agent()
+        chat_id = agent.chat_memory.create_chat()
+
+        agent.memory.save_session(
+            "s1",
+            [
+                Message(role="system", content="sys-1"),
+                Message(role="user", content="task-1"),
+                Message(role="assistant", content="answer-1"),
+            ],
+        )
+        agent.memory.save_session(
+            "s2",
+            [
+                Message(role="system", content="sys-2"),
+                Message(role="system", content="memory-2"),
+                Message(role="user", content="task-2"),
+                Message(role="assistant", content="answer-2"),
+            ],
+        )
+        agent.chat_memory.add_session_to_chat(chat_id, "s1")
+        agent.chat_memory.add_session_to_chat(chat_id, "s2")
+
+        self.assertTrue(agent.load_chat(chat_id))
+        self.assertEqual(agent.chat_id, chat_id)
+        self.assertEqual(agent.session_id, "s2")
+        self.assertEqual(
+            [(msg.role, msg.content) for msg in agent.messages],
+            [
+                ("system", "sys-1"),
+                ("user", "task-1"),
+                ("assistant", "answer-1"),
+                ("user", "task-2"),
+                ("assistant", "answer-2"),
+            ],
+        )
+
+        saved = agent.memory.load_session("s2")
+        self.assertEqual(
+            [(msg.role, msg.content) for msg in saved],
+            [(msg.role, msg.content) for msg in agent.messages],
+        )
+
+        meta = agent.chat_memory.load_chat_meta(chat_id)
+        self.assertEqual(meta["session_ids"], ["s2"])
 
 
 if __name__ == "__main__":

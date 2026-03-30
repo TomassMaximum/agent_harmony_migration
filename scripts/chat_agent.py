@@ -281,19 +281,25 @@ def main() -> None:
     print("输入 /state 查看当前 session 状态")
     print("输入 /permissions 查看当前永久授权路径")
     print("输入 /approve <path> 永久授权某个路径")
-    print("输入 /reset 重置当前 session（仍挂在当前 chat 下）")
+    print("输入 /reset 重置当前 session（不会创建新 session）")
     print("输入 /newchat 切换到一个新 chat")
     print("输入 /edit 打开外部编辑器编写长文本")
     print()
 
     try:
-        start_new_session(agent, initial_task, inject_current_chat_memory=True)
+        if chat_memory.load_chat_meta(selected_chat_id) and agent.load_chat(selected_chat_id):
+            print(f"[system] 当前 chat_id: {agent.chat_id}")
+            print(f"[system] 当前 session_id: {agent.session_id}")
+            print("[system] 已恢复 chat 全部历史上下文，开始自动执行。")
+            drive_cli_session_until_stop(agent, agent.max_steps, user_message=initial_task)
+        else:
+            start_new_session(agent, initial_task, inject_current_chat_memory=True)
 
-        print(f"[system] 当前 chat_id: {agent.chat_id}")
-        print(f"[system] 当前 session_id: {agent.session_id}")
-        print("[system] 会话已创建，开始自动执行。")
+            print(f"[system] 当前 chat_id: {agent.chat_id}")
+            print(f"[system] 当前 session_id: {agent.session_id}")
+            print("[system] 会话已创建，开始自动执行。")
 
-        drive_cli_session_until_stop(agent, agent.max_steps)
+            drive_cli_session_until_stop(agent, agent.max_steps)
 
     except Exception as e:
         print(f"\n初始化失败：{e}", file=sys.stderr)
@@ -348,14 +354,8 @@ def main() -> None:
         if user_input == "/reset":
             try:
                 new_task = build_initial_task()
-                finalize_before_switch()
-                agent = build_agent(
-                    max_steps=args.max_steps,
-                    root=args.root,
-                    chat_id=agent.chat_id,
-                    permission_approval_handler=prompt_permission_approval,
-                )
-                start_new_session(agent, new_task, inject_current_chat_memory=True)
+                agent.reset_session()
+                start_new_session(agent, new_task, inject_current_chat_memory=False)
                 print("[system] 已重置当前 session，默认继续执行。")
                 print(f"[system] 当前 chat_id: {agent.chat_id}")
                 print(f"[system] 当前 session_id: {agent.session_id}")

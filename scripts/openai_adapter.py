@@ -214,7 +214,15 @@ def ensure_agent(conversation_key: str) -> AgentLoop:
             sys.stderr.write("[ensure_agent] session loaded successfully\n")
             return agent
 
-        sys.stderr.write("[ensure_agent] session load failed, starting new session in existing chat\n")
+        sys.stderr.write("[ensure_agent] session load failed, trying full chat restore\n")
+        if agent.load_chat(chat_id):
+            _conversation_map[conversation_key]["session_id"] = agent.session_id
+            sys.stderr.write(
+                f"[ensure_agent] chat restored successfully, session_id={agent.session_id}\n"
+            )
+            return agent
+
+        sys.stderr.write("[ensure_agent] chat restore failed, starting new session in existing chat\n")
         start_new_session(agent, WEB_CHAT_INIT_TASK, inject_current_chat_memory=True)
         _conversation_map[conversation_key]["session_id"] = agent.session_id
         sys.stderr.write(

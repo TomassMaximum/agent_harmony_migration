@@ -171,6 +171,59 @@ class AgentLoop:
             self.chat_memory.add_session_to_chat(self.chat_id, session_id)
             return True
 
+    def load_chat(self, chat_id: Optional[str] = None) -> bool:
+        target_chat_id = chat_id or self.chat_id
+        meta = self.chat_memory.load_chat_meta(target_chat_id)
+        if not meta:
+            return False
+
+        session_ids = [
+            sid for sid in meta.get("session_ids", [])
+            if isinstance(sid, str) and sid.strip()
+        ]
+        if not session_ids:
+            return False
+
+        merged_messages: List[Message] = []
+        loaded_session_ids: List[str] = []
+
+        for session_id in session_ids:
+            session_messages = self.memory.load_session(session_id)
+            if not session_messages:
+                continue
+
+            if merged_messages:
+                start_index = 0
+                while start_index < len(session_messages) and session_messages[start_index].role == "system":
+                    start_index += 1
+                merged_messages.extend(session_messages[start_index:])
+            else:
+                merged_messages.extend(session_messages)
+
+            loaded_session_ids.append(session_id)
+
+        if not merged_messages or not loaded_session_ids:
+            return False
+
+        active_session_id = loaded_session_ids[-1]
+
+        with self.lock:
+            self.chat_id = target_chat_id
+            self.session_id = active_session_id
+            self.messages = merged_messages
+            self.session_started = True
+            self.finished = False
+            self.pause_requested = False
+
+        if loaded_session_ids != [active_session_id]:
+            self.memory.save_session(active_session_id, merged_messages)
+
+            normalized_meta = dict(meta)
+            normalized_meta["session_ids"] = [active_session_id]
+            self.chat_memory.save_chat_meta(target_chat_id, normalized_meta)
+
+        return True
+
     def request_pause(self) -> None:
         with self.lock:
             self.pause_requested = True
