@@ -118,15 +118,21 @@ python3 scripts/llm_provider.py checkout openai
 ### 3. 启动交互式 CLI
 
 ```bash
-python3 scripts/chat_agent.py "先分析当前工程结构"
+python3 scripts/chat_agent.py --root .
 ```
 
 可选参数：
 
 ```bash
-python3 scripts/chat_agent.py "先分析当前工程结构" \
+python3 scripts/chat_agent.py \
   --max-steps 120 \
   --root .
+```
+
+启动后可输入 builder 任务，例如：
+
+```text
+请围绕 wikipedia Android 工程输出模块层全量分析，并把 unknown 项按阈值筛出待确认项清单
 ```
 
 ### 4. 启动 Web 适配层

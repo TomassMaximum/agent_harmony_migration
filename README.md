@@ -1,22 +1,70 @@
 # hm_agent
 
-`hm_agent` 当前是一个面向工程探索与迁移辅助的 agent 底座，已经完成里程碑 1 的收口工作。
+`hm_agent` 当前的产品目标已经收敛为：
 
-当前状态：
+一个面向单一真实项目的 `Android -> HarmonyOS` 迁移分析 orchestrator。
+
+它不是直接把整个迁移一次性做完，也不是先抽象成通用 builder 再找场景验证。当前阶段更务实的目标是：
+
+- 围绕固定 Android 源工程做全量、分层分析
+- 驱动 `qwen` 输出可持续修正的结构化 `project memory`
+- 在关键不确定项处暂停，并通过待确认项清单与用户协作
+- 为后续多会话、TDD 驱动的迁移实现提供唯一 roadmap
+
+## 当前 MVP-1 目标
+
+当前 MVP 不是“生成完整迁移 agent 工程”，而是“把迁移分析闭环跑通”。
+
+MVP-1 的交付物是：
+
+- 落在目标鸿蒙工程内的结构化 `project_memory/`
+- 分层分析产物
+- unknown / gap 持续跟踪与复查机制
+- 待确认项清单与恢复继续能力
+- 高可读 Markdown 导出文档
+
+当前固定目标项目：
+
+- Android 源工程：
+  `/Users/weibaoping/Android/opensource/wikipedia-android/apps-android-wikipedia/`
+- HarmonyOS template 工程：
+  `/Users/weibaoping/ohos/migrate/wiki/`
+
+最终形态仍然是迁移出可编译、可运行、主要功能页面可达的 HarmonyOS 工程；但那属于后续阶段，不是当前 MVP-1 的范围。
+
+## 产品原则
+
+- 先服务一个固定项目，再考虑抽象通用性
+- 每一层分析都要求当前层全量覆盖，不做“最小实现”
+- 以 `模块 + 页面/流程 + 功能点` 三视角交叉防漏
+- `project memory` 是事实源，Markdown 只是导出视图
+- 具体迁移项目产物必须落在目标鸿蒙工程内，而不是当前 agent 仓库内
+- 不确定项必须持续携带、反查、消解，不能伪确定
+- 高风险 unknown 才暂停并请求人工确认
+- 低风险 unknown 可由 agent 按规则自治，但必须记录依据
+
+## 当前仓库状态
+
+当前项目已完成里程碑 1，并已进入 MVP-1 的迁移分析闭环，现状更准确地说是：
 
 - 已有统一执行主干
 - 已有统一事件协议、停止原因与 trace 输出
 - 已有 chat / session 记忆
 - 已有最小权限阻断
 - 已有基线测试
-- 当前只保留两个正式入口：
-  - `scripts/chat_agent.py`
-  - `scripts/openai_adapter.py`
+- 已有 `project_memory` 存储层、模块层和页面层分析
+- 已有 CLI 与 OpenAI 风格 Web 入口
 
-项目还没有进入文档中定义的完整迁移闭环。当前更准确的定位是：
+当前仍缺少：
 
-- “稳定的 agent 底座”
-- 不是“完整的分阶段迁移 orchestrator”
+- 流程层、功能点层、实现骨架层
+- 待确认项筛选与确认回写 CLI
+- 多轮 unknown 收敛与 gap 复查闭环
+
+## 当前正式入口
+
+- `scripts/chat_agent.py`
+- `scripts/openai_adapter.py`
 
 ## 当前支持能力
 
@@ -24,6 +72,7 @@
 - OpenAI 风格 Web 适配层
 - 工具调用与事件追踪
 - chat / session 持久化
+- 以当前代码库为对象的增量演进
 - 分类停止原因：
   - `final`
   - `max_steps`
@@ -34,9 +83,8 @@
 
 ## 当前限制
 
-- 还没有 `project_memory/` 和结构化工程产物
-- 还没有 `Analyze -> Design -> Implement -> Review` 的阶段编排
-- 权限策略目前是最小可控版本：
+- 还没有流程层、功能点层、实现层、测试层的正式编排
+- 权限策略目前仍是最小可控版本：
   - 只读命令默认允许
   - `run_command` 的工作区外路径修改会先申请授权
   - CLI 中用户同意后会永久写入授权配置
@@ -54,7 +102,7 @@ python3 scripts/llm_provider.py which
 
 ```bash
 python3 scripts/llm_provider.py ls
-python3 scripts/llm_provider.py checkout deepseek
+python3 scripts/llm_provider.py checkout qwen
 ```
 
 LLM 的 `model`、`api_key`、`base_url` 都统一写在 [config.json](/Users/weibaoping/agent/ohos_migration/ohmv1/hm_agent/config.json)。
@@ -62,8 +110,16 @@ LLM 的 `model`、`api_key`、`base_url` 都统一写在 [config.json](/Users/we
 ### 3. 启动交互式 CLI
 
 ```bash
-python3 scripts/chat_agent.py "先分析当前工程结构"
+python3 scripts/chat_agent.py --root .
 ```
+
+启动后可直接输入类似任务：
+
+```text
+请围绕 wikipedia Android 工程输出模块层全量分析，并把 unknown 项按阈值筛出待确认项清单
+```
+
+阶段分析产物默认会写到目标鸿蒙工程下的 `.migration/project_memory/`，不会再写到当前 agent 仓库根目录。
 
 权限相关命令：
 
@@ -86,10 +142,12 @@ python3 scripts/openai_adapter.py
 
 ## 文档
 
+- MVP 目标：[docs/MVP_minimum.md](/Users/weibaoping/agent/ohos_migration/ohmv1/hm_agent/docs/MVP_minimum.md)
 - 开发路线图：[docs/development_roadmap.md](/Users/weibaoping/agent/ohos_migration/ohmv1/hm_agent/docs/development_roadmap.md)
+- `project_memory` schema：[docs/project_memory_schema.md](/Users/weibaoping/agent/ohos_migration/ohmv1/hm_agent/docs/project_memory_schema.md)
+- 阶段机与 unknown 机制：[docs/analysis_orchestration.md](/Users/weibaoping/agent/ohos_migration/ohmv1/hm_agent/docs/analysis_orchestration.md)
 - 运行与配置：[docs/runtime_config.md](/Users/weibaoping/agent/ohos_migration/ohmv1/hm_agent/docs/runtime_config.md)
 - 基线测试：[docs/testing_baseline.md](/Users/weibaoping/agent/ohos_migration/ohmv1/hm_agent/docs/testing_baseline.md)
-- MVP 目标：[docs/MVP_minimum.md](/Users/weibaoping/agent/ohos_migration/ohmv1/hm_agent/docs/MVP_minimum.md)
 - 记忆模块说明：[docs/memory_module.md](/Users/weibaoping/agent/ohos_migration/ohmv1/hm_agent/docs/memory_module.md)
 
 ## 基线测试
@@ -105,5 +163,6 @@ python3 -m unittest discover -s tests -p 'test_*.py' -v
 下一阶段重点是里程碑 2：
 
 - 引入 `project_memory/`
-- 落地 `project_overview.json`
-- 为 Analyze 阶段提供结构化产物输出
+- 固化 `builder_job`、索引 schema 与导出 manifest
+- 固化阶段机与 unknown 管理机制
+- 让当前运行底座进入可持续续跑的迁移分析闭环

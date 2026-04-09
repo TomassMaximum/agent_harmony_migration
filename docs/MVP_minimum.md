@@ -1,256 +1,216 @@
-鸿蒙迁移 Agent 最小可用架构设计（MVP）
-一、背景与目标
-1.1 背景
+# Android -> HarmonyOS 迁移分析 Orchestrator MVP（MVP-1）
 
-当前目标是构建一个 鸿蒙 App 迁移 Agent，用于将 Android / iOS / Flutter 等项目迁移到 HarmonyOS（ArkTS）平台。
+## 1. 产品定位
 
-传统 Agent 存在的问题：
+当前产品不是通用工程问题 agent builder，也不是直接交付完整 HarmonyOS 业务代码的全自动迁移器。
 
-上下文过大 → 输出不稳定
-分析与实现混在一起 → 容易走偏
-无法持续记忆工程状态 → 每次从头理解
-缺乏验收机制 → 结果不可控
-1.2 设计目标
+当前 MVP-1 的准确定位是：
 
-本系统目标：
+一个围绕固定 Android 项目运行的迁移分析 orchestrator。
 
-控制上下文规模，提升稳定性
-分阶段推进（分析 → 设计 → 实现 → 验收）
-引入 Contract + Test 机制保证正确性
-构建结构化工程记忆（非 chat 记忆）
-支持失败回退与重新设计
-二、总体架构
-2.1 核心组件
+它的职责是：
 
-系统由 4 个核心组件组成：
+- 驱动 `qwen` 对源工程做分层、全量分析
+- 把分析结果沉淀为结构化 `project memory`
+- 管理 unknown / gap 的持续跟踪与复查
+- 在关键阻塞点暂停并输出待确认项清单
+- 为后续多会话、TDD 驱动的真正迁移实现提供 roadmap
 
-组件	职责
-Orchestrator	调度流程、控制阶段、决策流转
-Artifact Store	存储结构化工程记忆
-Worker Modes	不同阶段的 LLM 执行模式
-Harness	测试执行与结果验证
-2.2 架构关系
-User Input
-    ↓
-Orchestrator
-    ↓
-Worker Mode (LLM)
-    ↓
-Artifact Store（写入）
-    ↓
-Harness（执行测试）
-    ↓
-Orchestrator（决策）
-三、阶段划分（MVP）
+## 2. 当前目标项目
 
-系统划分为 4 个阶段：
+MVP-1 只服务一个固定项目，不追求一开始就通用：
 
-Phase 1：Project Analyze（全局分析）
-输入：
-原工程路径
-目标工程路径
-输出：
-project_overview.json
-职责：
-判断项目类型（Android / Flutter 等）
-识别目录结构
-拆分一级模块
-识别风险
-限制：
-❌ 不允许修改代码
-Phase 2：Module Design（模块设计）
-输入：
-project_overview
-相关源码（最小必要）
-输出：
-modules/<module>/design.json
-职责：
-定义模块职责
-定义接口（Contract）
-定义依赖
-定义验收标准（Test Spec）
-限制：
-❌ 不允许修改代码
-Phase 3：Module Implement（模块实现）
-输入：
-module design
-必要源代码
-输出：
-代码修改
-implementation.json
-职责：
-实现模块逻辑
-自检
-标记问题
-Phase 4：Module Review（模块验收）
-输入：
-design
-implementation
-测试结果
-diff
-输出：
-review.json
-决策：
-✅ approved
-🔁 rework
-🧠 redesign
-四、核心数据结构（Schema）
-4.1 Project Overview
-{
-  "project_name": "",
-  "source_platform": "",
-  "target_platform": "HarmonyOS ArkTS",
-  "source_project_path": "",
-  "target_project_path": "",
-  "high_level_summary": "",
-  "module_list": [
-    {
-      "name": "",
-      "type": "infrastructure | business | shared",
-      "description": "",
-      "priority": 0
-    }
-  ],
-  "global_risks": [],
-  "current_stage": "analyze | design | implement | review"
-}
-4.2 Module Design（核心 Contract）
-{
-  "module_name": "",
-  "responsibility": "",
-  "inputs": [],
-  "outputs": [],
-  "public_interfaces": [
-    {
-      "name": "",
-      "signature": "",
-      "expected_behavior": "",
-      "error_behavior": ""
-    }
-  ],
-  "dependencies": [],
-  "target_files": [],
-  "acceptance_criteria": [],
-  "notes": []
-}
-4.3 Implementation Report
-{
-  "module_name": "",
-  "based_on_design": "",
-  "modified_files": [],
-  "implemented_interfaces": [],
-  "self_check_summary": "",
-  "known_issues": [],
-  "status": "done | partial | blocked"
-}
-4.4 Review Result
-{
-  "module_name": "",
-  "review_input": {
-    "design_version": "",
-    "implementation_version": ""
-  },
-  "test_result": "pass | fail | partial",
-  "contract_match": true,
-  "issues": [],
-  "decision": "approved | rework | redesign",
-  "next_action": ""
-}
-五、Worker Modes（角色模式）
+- Android 源工程：
+  `/Users/weibaoping/Android/opensource/wikipedia-android/apps-android-wikipedia/`
+- HarmonyOS template 工程：
+  `/Users/weibaoping/ohos/migrate/wiki/`
 
-统一使用一个模型，通过不同模式控制行为：
+这个选择是产品策略，不是临时妥协。先把一个真实项目迁移分析做扎实，再抽象可复用能力，风险最低。
 
-Mode	职责
-analyze_mode	工程结构分析
-design_mode	模块设计
-implement_mode	代码实现
-review_mode	验收决策
-六、Harness（测试系统）
-6.1 职责
-执行测试
-收集日志
-比对结果
-输出结构化结果
-6.2 测试分层
-1. Contract Test
-方法输入/输出正确性
-2. Module Test
-模块逻辑闭环
-3. Integration Test（后续阶段）
-跨模块协作
-七、核心流程（单模块）
-Analyze（全局）
-    ↓
-Select Module
-    ↓
-Design Module
-    ↓
-Implement Module
-    ↓
-Run Tests (Harness)
-    ↓
-Review
-    ↓
-[通过] → 下一模块
-[失败] → Rework / Redesign
-八、关键约束（必须遵守）
-8.1 分阶段约束
-阶段	是否允许改代码
-Analyze	❌
-Design	❌
-Implement	✅
-Review	❌
-8.2 Contract 不可下层修改
+## 3. 用户与交付目标
 
-实现层：
+当前用户是单个开发者本人。
 
-❌ 不允许修改接口定义
-❌ 不允许修改测试预期
-✅ 只能实现或上报问题
-8.3 单模块执行原则
+用户真正需要的不是“聊完一次就结束的分析答案”，而是：
 
-同一时间只允许一个模块进入实现阶段
+- 一个能稳定继续任务的迁移分析系统
+- 一个不会因为多次会话而漂移的事实源
+- 一个能逐步把分析推进到实现骨架层的 roadmap
 
-优势：
+最终长期目标仍然是：
 
-控制复杂度
-易调试
-易回滚
-九、工程记忆（Artifact Store）
-9.1 存储结构
-project_memory/
-  project_overview.json
-  modules/
-    network/
-      design.json
-      implementation.json
-      review.json
-9.2 设计原则
-不存 chat history
-只存结构化工程状态
-每个阶段产出即记忆
-十、最小实现顺序（推荐）
-✅ 实现 project_overview 生成
-✅ 实现 module design
-✅ 实现 implement → review 闭环
-✅ orchestrator 控制流程
-十一、设计原则总结
-核心原则
-上下文最小化
-分阶段执行
-Contract 驱动
-测试约束
-单模块推进
-一句话总结
+- 产出可编译、可运行、主要功能页面可达的 HarmonyOS 工程
+- 最终提供清晰、高可读性的交付文档
 
-不是让一个 Agent 记住所有事情，而是让系统通过分层产物和测试约束，逐步收敛工程的正确状态。
+但 `MVP-1` 本身不要求完成真正的迁移实现。
 
-十二、后续扩展（非 MVP）
+## 4. MVP-1 交付物
 
-后续可以逐步增加：
+MVP-1 必须稳定交付以下产物：
 
-Decision Log（决策记录）
-Feedback Ticket（设计反馈）
-多模块并行（受控）
-失败 Case 学习
-Agent 多角色拆分
+- 目标鸿蒙工程内的 `project_memory/` 结构化目录
+- 模块层、页面层、流程层、功能点层的索引与映射
+- 实现层骨架：
+  - 目标文件清单
+  - 类/方法签名
+  - 行为契约
+  - 测试入口
+  - mock 决策点
+- unknown / gap 跟踪队列
+- 待确认项清单
+- Markdown 导出文档
+
+## 5. 产品原则
+
+### 5.1 分层推进，但每层都要求全量覆盖
+
+不是“一轮做整个 app 的全量”，而是：
+
+- 模块层全量覆盖
+- 页面层全量覆盖
+- 流程层全量覆盖
+- 实现骨架层全量覆盖
+
+每一层结束后都必须做覆盖校验，再进入下一层。
+
+### 5.2 防漏优先级高于美观和速度
+
+不能接受遗漏业务功能。
+
+覆盖必须同时从三套视角交叉验证：
+
+- 模块
+- 页面 / 用户流程
+- 功能点
+
+只有三者相互映射后，才可判定覆盖基本完整。
+
+### 5.3 `project memory` 是事实源
+
+开发过程中优先机器可消费、可续跑的结构化产物。
+
+默认存放位置：
+
+- `<target-harmony-project>/.migration/project_memory/`
+
+Markdown 文档只用于：
+
+- 交付展示
+- 快速审阅
+- 对外沟通
+
+它不是后续实现的主事实源。
+
+### 5.4 unknown 必须显式跟踪
+
+一旦发现不确定项：
+
+- 立即写入 unknown 队列
+- 带着问题进入后续层次继续分析
+- 若后续证据足够，则消解并关闭
+- 若全项目分析完成后仍无法确认，再进入最终 gap
+
+不允许伪确定，也不允许把早期 unknown 直接遗留到最终结果而不复查。
+
+### 5.5 高风险项才触发人工确认
+
+系统默认自动推进。
+
+只有当 unknown 的不确定度或风险达到阈值，且可能造成：
+
+- 后续实现阻塞
+- 关键方案分歧
+- 主要业务页面错误判断
+
+才暂停并向用户抛出待确认项清单。
+
+### 5.6 允许 mock，但必须留下决策痕迹
+
+当依赖链不明时，优先保证前端业务流程可达。
+
+经用户确认后，允许：
+
+- 用 mock 数据
+- 用 mock 服务
+- 用占位能力替代未确认依赖
+
+但必须在 memory 中记录：
+
+- 为什么可以 mock
+- mock 覆盖了什么
+- 后续必须回填什么
+
+## 6. `qwen` 在系统中的角色
+
+`qwen` 当前承担：
+
+- 分析执行
+- 初步拆解
+- 骨架化输出
+
+主 orchestrator 的职责是：
+
+- 下发分层任务
+- 审查输出是否覆盖完整
+- 根据缺陷调整 prompt
+- 决定是否打回、重试或进入下一层
+
+换句话说，`qwen` 不是最终裁判，主 orchestrator 才负责质量收敛。
+
+## 7. MVP-1 范围
+
+### 7.1 In Scope
+
+- 固定项目的全量分层分析
+- `project_memory` 结构化沉淀
+- 覆盖校验
+- unknown 跟踪与复查
+- 待确认项清单
+- Markdown 导出
+
+### 7.2 Out Of Scope
+
+- 一开始支持多个 Android 项目
+- 一开始支持任意工程问题
+- 直接产出完整 HarmonyOS 业务代码
+- 完整的迁移实现闭环与回归测试闭环
+
+## 8. MVP-1 最低可用标准
+
+第一版“可用”至少意味着：
+
+- 能针对 Wikipedia Android 项目跑完整个分层分析
+- 能产出结构化 `project memory`
+- 能以 `模块 + 页面/流程 + 功能点` 交叉校验覆盖
+- 能在高风险 unknown 处暂停
+- 能生成可操作的待确认项清单
+- 用户确认后能继续执行，不必从头再来
+- 能导出清晰 Markdown 文档
+- 最细层能落到文件、类、方法、行为契约和测试入口
+
+## 9. 从 MVP-1 到最终形态
+
+建议分两段演进：
+
+### 9.1 MVP-1
+
+先把迁移分析 orchestrator 做扎实：
+
+- memory
+- 阶段机
+- unknown 管理
+- 导出
+
+### 9.2 MVP-2 及以后
+
+基于稳定的 `project memory`，继续做：
+
+- HarmonyOS 工程骨架生成
+- TDD 驱动的实现任务拆分
+- 多会话实现续跑
+- 可编译、可运行、主页面可达
+- gap 收敛与最终交付
+
+## 10. 一句话总结
+
+当前产品的核心不是“让一个模型一次性迁完 App”，而是“让系统围绕固定项目，稳定地产出不漏业务、可持续续跑、可驱动后续实现的迁移 project memory”。
