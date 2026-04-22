@@ -6,7 +6,7 @@
     "chat_storage_path": "./chats"
   },
   "llm": {
-    "current": "qwen",
+    "current": "mimo",
     "providers": {
       "deepseek": {
         "provider": "deepseek",
@@ -27,6 +27,13 @@
         "model": "qwen-plus",
         "api_key": "sk-3d05661246234728b92aedbf4d2bb4ea",
         "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "timeout": 120
+      },
+      "mimo": {
+        "provider": "mimo",
+        "model": "mimo-v2-pro",
+        "api_key": "tp-cfwn1a8w7bpqe00y2ak5fow089j2l8c2j97tml6824l3pdxq",
+        "base_url": "https://token-plan-cn.xiaomimimo.com/v1",
         "timeout": 120
       }
     }

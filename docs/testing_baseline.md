@@ -102,12 +102,64 @@ python3 -m py_compile scripts/*.py agent/*.py tools/*.py config.py tests/*.py
 - conversation key 派生稳定性
 - Web trace markdown 拼接
 
+### `tests/test_project_memory.py`
+
+覆盖：
+
+- `agent/project_memory.py`
+
+验证点：
+
+- 默认 `project_memory` 路径落在目标鸿蒙工程下
+- 显式路径优先级
+- 最小目录结构初始化
+- `builder_job`、`project_overview` 等基础 schema 校验
+
+### `tests/test_phase1_module_analysis.py`
+
+覆盖：
+
+- `agent/phase1_module_analysis.py`
+
+验证点：
+
+- 模块层分析默认输出到目标工程 `.migration/project_memory/`
+- 本地 review 能发现高信号包未覆盖
+- LLM 输出重试后可持久化模块层产物
+
+### `tests/test_page_analysis.py`
+
+覆盖：
+
+- `agent/page_analysis.py`
+
+验证点：
+
+- 页面层组件识别与 module 归属
+- manifest activity 覆盖校验
+- module package binding 补全
+- 页面层分析重试与持久化
+
+### `tests/test_unknown_queue.py`
+
+覆盖：
+
+- `agent/unknown_queue.py`
+- `scripts/review_unknown_queue.py` 依赖的纯函数路径
+
+验证点：
+
+- 待确认项筛选与 page mapping 聚合
+- unknown 确认后写入 decisions 并更新 queue
+- unknown 延后处理
+- 确认阈值写回 `builder_job.json`
+
 ## 运行预期
 
 当前基线测试通过时，典型输出应为：
 
 ```text
-Ran 20+ tests in ...
+Ran 51 tests in ...
 
 OK
 ```
@@ -126,3 +178,7 @@ OK
 - `tools/`
 - `agent/memory.py`
 - `agent/chat_memory.py`
+- `agent/project_memory.py`
+- `agent/phase1_module_analysis.py`
+- `agent/page_analysis.py`
+- `agent/unknown_queue.py`

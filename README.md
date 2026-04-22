@@ -1,6 +1,10 @@
 # hm_agent
 
-`hm_agent` 当前的产品目标已经收敛为：
+`hm_agent` 的最终产品形态是：
+
+一个面向移动端源码工程的 `source app -> HarmonyOS` 迁移 agent。用户可以替换源项目为 Android、iOS、Flutter 或其它移动端工程，并向 agent 下达一次迁移指令；agent 负责识别项目结构、分析业务覆盖、规划目标鸿蒙工程、迁移大部分代码、持续修复构建与测试问题，并把未能自动闭环的部分沉淀为可追踪 gap。
+
+当前 MVP-1 的产品目标已经收敛为：
 
 一个面向单一真实项目的 `Android -> HarmonyOS` 迁移分析 orchestrator。
 
@@ -9,7 +13,7 @@
 - 围绕固定 Android 源工程做全量、分层分析
 - 驱动 `qwen` 输出可持续修正的结构化 `project memory`
 - 在关键不确定项处暂停，并通过待确认项清单与用户协作
-- 为后续多会话、TDD 驱动的迁移实现提供唯一 roadmap
+- 为后续多会话、TDD 驱动的迁移实现和多源工程泛化提供唯一 roadmap
 
 ## 当前 MVP-1 目标
 
@@ -30,11 +34,12 @@ MVP-1 的交付物是：
 - HarmonyOS template 工程：
   `/Users/weibaoping/ohos/migrate/wiki/`
 
-最终形态仍然是迁移出可编译、可运行、主要功能页面可达的 HarmonyOS 工程；但那属于后续阶段，不是当前 MVP-1 的范围。
+最终形态仍然是对可替换源项目迁移出可编译、可运行、主要功能页面可达的 HarmonyOS 工程；但跨 Android / iOS / Flutter 泛化、完整实现闭环和回归测试闭环属于后续阶段，不是当前 MVP-1 的范围。
 
 ## 产品原则
 
 - 先服务一个固定项目，再考虑抽象通用性
+- 固定 Wikipedia Android 项目是第一块验证样板，不是最终产品边界
 - 每一层分析都要求当前层全量覆盖，不做“最小实现”
 - 以 `模块 + 页面/流程 + 功能点` 三视角交叉防漏
 - `project memory` 是事实源，Markdown 只是导出视图
@@ -53,18 +58,23 @@ MVP-1 的交付物是：
 - 已有最小权限阻断
 - 已有基线测试
 - 已有 `project_memory` 存储层、模块层和页面层分析
+- 已有 unknown 队列筛选、聚合、确认、延后和阈值调整 CLI
 - 已有 CLI 与 OpenAI 风格 Web 入口
 
 当前仍缺少：
 
-- 流程层、功能点层、实现骨架层
-- 待确认项筛选与确认回写 CLI
-- 多轮 unknown 收敛与 gap 复查闭环
+- 流程层、功能点层、实现骨架层、测试骨架层
+- 多轮 unknown 收敛、复查与最终 gap 闭环
+- 基于 `project_memory` 的 HarmonyOS 代码迁移实现闭环
+- 多源工程适配层：Android 以外的 iOS、Flutter 等源项目识别与分析
 
 ## 当前正式入口
 
 - `scripts/chat_agent.py`
 - `scripts/openai_adapter.py`
+- `scripts/run_phase1_module_analysis.py`
+- `scripts/run_stage2_page_analysis.py`
+- `scripts/review_unknown_queue.py`
 
 ## 当前支持能力
 
@@ -121,6 +131,40 @@ python3 scripts/chat_agent.py --root .
 
 阶段分析产物默认会写到目标鸿蒙工程下的 `.migration/project_memory/`，不会再写到当前 agent 仓库根目录。
 
+### 4.1 查看待人工确认项批次
+
+```bash
+python3 scripts/review_unknown_queue.py list \
+  --target-template-project-path /Users/weibaoping/ohos/migrate/wiki/
+```
+
+### 4.2 按推荐项确认一批问题
+
+```bash
+python3 scripts/review_unknown_queue.py decide \
+  --target-template-project-path /Users/weibaoping/ohos/migrate/wiki/ \
+  --item-id cluster_5e612d14493b \
+  --choice recommended \
+  --rationale "搜索页相关组件先统一归属到主搜索页"
+```
+
+### 4.3 延后某批问题
+
+```bash
+python3 scripts/review_unknown_queue.py defer \
+  --target-template-project-path /Users/weibaoping/ohos/migrate/wiki/ \
+  --item-id unk_flavor_feature_gating \
+  --rationale "等功能点层分析后再确认"
+```
+
+### 4.4 调整人工确认阈值
+
+```bash
+python3 scripts/review_unknown_queue.py set-threshold \
+  --target-template-project-path /Users/weibaoping/ohos/migrate/wiki/ \
+  --value 70
+```
+
 权限相关命令：
 
 ```bash
@@ -128,7 +172,7 @@ python3 scripts/chat_agent.py --root .
 /approve /path/to/allow
 ```
 
-### 4. 启动 Web 适配层
+### 5. 启动 Web 适配层
 
 ```bash
 python3 scripts/openai_adapter.py
@@ -160,9 +204,9 @@ python3 -m unittest discover -s tests -p 'test_*.py' -v
 
 ## 下一步
 
-下一阶段重点是里程碑 2：
+下一阶段重点是补齐里程碑 2 的后半段，并为里程碑 3 做准备：
 
-- 引入 `project_memory/`
-- 固化 `builder_job`、索引 schema 与导出 manifest
-- 固化阶段机与 unknown 管理机制
-- 让当前运行底座进入可持续续跑的迁移分析闭环
+- 推进流程层、功能点层、实现骨架层和测试骨架层
+- 把 page analysis 后的 `project_overview`、coverage 与导出 manifest 保持同步
+- 继续收敛 unknown 队列，形成人工确认、自治决策、复查和 final gap 闭环
+- 基于稳定 `project_memory` 生成 HarmonyOS 实现任务与可执行迁移计划

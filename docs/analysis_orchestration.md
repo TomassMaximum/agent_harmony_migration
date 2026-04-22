@@ -307,6 +307,16 @@ decision_score = max(uncertainty_score, severity_score)
 
 这份清单应成为用户与系统之间的主要沟通通道。
 
+当前实现约定：
+
+- 先对 `unknowns/queue.json` 做确定性过滤，不把是否需要人工确认完全交给 LLM
+- 对同类 `page_mapping` unknown 做规则归并，避免一次抛出大量碎片问题
+- 通过 CLI 执行人工确认与回写：
+  - `scripts/review_unknown_queue.py list`
+  - `scripts/review_unknown_queue.py decide`
+  - `scripts/review_unknown_queue.py defer`
+  - `scripts/review_unknown_queue.py set-threshold`
+
 ## 7. 复查规则
 
 所有仍处于 `open` 或 `in_review` 的 unknown，在最终输出 gap 前必须至少复查一轮。
@@ -330,6 +340,8 @@ decision_score = max(uncertainty_score, severity_score)
 - 记录是否使用 mock
 
 这样可以让后续会话理解“为什么之前这么做”。
+
+当前 MVP-1 中，这条链路优先通过本地确定性规则实现，而不是继续依赖 prompt 扩张来提升 LLM 的判别能力。
 
 ## 9. mock 决策规则
 

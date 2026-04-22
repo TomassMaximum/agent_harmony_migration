@@ -2,20 +2,14 @@
 
 ## 概述
 
-当前仓库已经实现两层运行时记忆：
+当前仓库已经实现三层记忆中的前两层运行时记忆，并已落地第三层 `Project Memory` 的基础存储：
 
 - Session Memory
 - Chat Memory
 
 它们解决的是“对话如何恢复与延续”的问题。
 
-但按照当前产品目标，后续还需要第三层：
-
-- Project Memory
-
-它解决的是“迁移分析结果如何成为多会话共享的事实源”的问题。
-
-本文件先说明当前已实现的两层记忆，并明确它们与 `project_memory/` 的边界。当前约定中，`project_memory` 默认落在目标鸿蒙工程下的 `.migration/project_memory/`，而不是当前 agent 仓库根目录。
+`Project Memory` 解决的是“迁移分析结果如何成为多会话共享的事实源”的问题。当前约定中，`project_memory` 默认落在目标鸿蒙工程下的 `.migration/project_memory/`，而不是当前 agent 仓库根目录。
 
 ## 三层记忆的职责边界
 
@@ -45,7 +39,7 @@
 - 能减少每次从头解释背景的成本
 - 仍然不适合作为迁移工程 roadmap
 
-### 3. Project Memory（规划中）
+### 3. Project Memory
 
 作用：
 
@@ -57,7 +51,8 @@
 
 - 以结构化工程状态为主，不保存聊天原文
 - 可被后续 agent 稳定消费
-- 要支持版本化、增量更新、导出和恢复继续
+- 已具备基础目录初始化、JSON 读写、schema 校验、模块层/页面层产物写入、unknown 队列和 Markdown 导出
+- 后续还需要补齐流程层、功能点层、实现骨架层、测试骨架层、复查和 final gap
 
 ## 当前已实现模块
 
@@ -141,7 +136,40 @@
 }
 ```
 
-### 3. AgentLoop 集成 (`agent/loop.py`)
+### 3. ProjectMemoryStore 类 (`agent/project_memory.py`)
+
+负责目标鸿蒙工程内迁移事实源的存储、初始化和基础校验。
+
+#### 存储位置
+
+- 默认位置：`<target-harmony-project>/.migration/project_memory/`
+- 当前 Wikipedia 样板位置：`/Users/weibaoping/ohos/migrate/wiki/.migration/project_memory/`
+
+#### 已初始化的核心结构
+
+- `builder_job.json`
+- `project_overview.json`
+- `coverage_status.json`
+- `export_manifest.json`
+- `indexes/module_index.json`
+- `indexes/page_index.json`
+- `indexes/flow_index.json`
+- `indexes/feature_index.json`
+- `indexes/file_index.json`
+- `indexes/evidence_index.json`
+- `unknowns/queue.json`
+- `unknowns/decisions.json`
+- `unknowns/final_gaps.json`
+- `skeletons/implementation_index.json`
+- `skeletons/test_index.json`
+
+#### 当前已有写入方
+
+- `agent/phase1_module_analysis.py`：写入模块层、证据索引、unknown 队列和 `exports/modules.md`
+- `agent/page_analysis.py`：写入页面层、合并 unknown 队列和 `exports/pages.md`
+- `agent/unknown_queue.py`：读取 unknown 队列，写入确认、延后和阈值决策
+
+### 4. AgentLoop 集成 (`agent/loop.py`)
 
 当前 `AgentLoop` 已完成：
 
@@ -150,7 +178,7 @@
 - 支持 session 恢复、chat 恢复和多 session 合并
 - 运行过程中保存会话
 
-这为后续 `project_memory` 打下了运行时基础，但不等于已经具备迁移分析事实存储。
+`AgentLoop` 负责对话与工具执行，不直接替代 `Project Memory`。迁移事实源应继续写入目标鸿蒙工程内的 `.migration/project_memory/`。
 
 ## 当前配置项
 
@@ -167,36 +195,38 @@
 
 ## 下一阶段需要补什么
 
-为适配当前产品目标，下一阶段需要新增第三层存储：
+为适配当前产品目标，下一阶段不是新增第三层存储，而是扩展已落地的 `Project Memory`：
 
-### 1. 新增目标工程内的 `project_memory/`
+### 1. 补齐剩余分析层
 
-建议存放：
+- `flow_index.json`
+- `feature_index.json`
+- `file_index.json`
+- `implementation_index.json`
+- `test_index.json`
 
-- `builder_job.json`
-- `project_overview.json`
-- 索引类产物
-- unknown 队列
-- 实现骨架与测试骨架
-- 导出 manifest
+### 2. 完善 unknown 生命周期
 
-默认位置：
+- 已有：队列筛选、聚合、确认、延后、阈值调整
+- 待补：跨阶段复查、自治决策记录、final gap 转换
 
-- `<target-harmony-project>/.migration/project_memory/`
-
-### 2. 明确与 chat/session 的关系
+### 3. 明确与 chat/session 的关系
 
 - Session / Chat：保存交流过程
 - Project Memory：保存迁移事实和 roadmap
 
 它们必须并存，但不能混用。
 
-### 3. 支持多会话续跑
+### 4. 支持多源项目迁移
+
+长期产品形态会支持 Android、iOS、Flutter 等源项目。不同源工程适配器都应把分析结果归一写入同一套 `project_memory` schema，让后续 HarmonyOS 实现闭环不依赖源技术栈细节。
+
+### 5. 支持多会话续跑
 
 后续实现会拆成多个会话，`project_memory` 必须能让新会话快速恢复到统一工程状态，而不是依赖阅读大量历史聊天记录。
 
 ## 注意事项
 
 1. 当前 `SessionMemory` 和 `ChatMemory` 已可用于恢复对话，但不能替代 `project_memory/`。
-2. 后续 `project_memory/` 应避免保存冗长 chat 文本，优先保存结构化事实、证据索引和状态字段。
+2. `project_memory/` 应避免保存冗长 chat 文本，优先保存结构化事实、证据索引和状态字段。
 3. 如果未来引入多进程并发分析，文件级存储需要额外的锁或乐观并发控制。

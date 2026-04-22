@@ -1,4 +1,12 @@
-# Android -> HarmonyOS 迁移分析 Orchestrator MVP（MVP-1）
+# App -> HarmonyOS 迁移 Agent MVP（MVP-1）
+
+## 0. 最终产品愿景
+
+最终产品形态是一个面向移动端源码工程的 `source app -> HarmonyOS` 迁移 agent。
+
+长期目标不是只能迁移当前 Wikipedia Android 项目，也不是只能服务 Android。用户应能把源工程替换为 Android、iOS、Flutter 或其它移动端项目，并向 agent 下达一条迁移指令；agent 负责完成项目识别、分层分析、差异建模、目标鸿蒙工程规划、代码迁移、构建修复、测试推进和 gap 收敛，最终交付可编译、可运行、主要功能页面可达的 HarmonyOS 工程，或至少完成大部分可自动化迁移工作并清晰列出剩余人工 gap。
+
+当前 MVP-1 选择 Wikipedia Android 作为唯一验证样板，是为了先把迁移分析、`project memory`、unknown 管理和多会话续跑闭环跑扎实。这个固定项目边界是阶段策略，不是最终产品边界。
 
 ## 1. 产品定位
 
@@ -14,7 +22,7 @@
 - 把分析结果沉淀为结构化 `project memory`
 - 管理 unknown / gap 的持续跟踪与复查
 - 在关键阻塞点暂停并输出待确认项清单
-- 为后续多会话、TDD 驱动的真正迁移实现提供 roadmap
+- 为后续多会话、TDD 驱动的真正迁移实现和多源工程泛化提供 roadmap
 
 ## 2. 当前目标项目
 
@@ -25,7 +33,7 @@ MVP-1 只服务一个固定项目，不追求一开始就通用：
 - HarmonyOS template 工程：
   `/Users/weibaoping/ohos/migrate/wiki/`
 
-这个选择是产品策略，不是临时妥协。先把一个真实项目迁移分析做扎实，再抽象可复用能力，风险最低。
+这个选择是产品策略，不是临时妥协。先把一个真实项目迁移分析做扎实，再抽象可复用能力和多源工程适配层，风险最低。
 
 ## 3. 用户与交付目标
 
@@ -39,7 +47,9 @@ MVP-1 只服务一个固定项目，不追求一开始就通用：
 
 最终长期目标仍然是：
 
+- 支持 Android、iOS、Flutter 等源项目迁移到 HarmonyOS
 - 产出可编译、可运行、主要功能页面可达的 HarmonyOS 工程
+- 自动完成大部分可迁移代码、构建修复和测试推进
 - 最终提供清晰、高可读性的交付文档
 
 但 `MVP-1` 本身不要求完成真正的迁移实现。
@@ -171,6 +181,7 @@ Markdown 文档只用于：
 ### 7.2 Out Of Scope
 
 - 一开始支持多个 Android 项目
+- 一开始支持 iOS、Flutter 等非 Android 源工程
 - 一开始支持任意工程问题
 - 直接产出完整 HarmonyOS 业务代码
 - 完整的迁移实现闭环与回归测试闭环
@@ -190,7 +201,7 @@ Markdown 文档只用于：
 
 ## 9. 从 MVP-1 到最终形态
 
-建议分两段演进：
+建议分四段演进：
 
 ### 9.1 MVP-1
 
@@ -211,6 +222,25 @@ Markdown 文档只用于：
 - 可编译、可运行、主页面可达
 - gap 收敛与最终交付
 
+### 9.3 多源工程适配
+
+在 Wikipedia Android 样板跑通后，抽象源工程适配层：
+
+- Android 适配器：Gradle、Manifest、Activity / Fragment / Compose、资源与变体
+- iOS 适配器：Xcode project、Swift / Objective-C、Storyboard / SwiftUI、路由与资源
+- Flutter 适配器：pubspec、Dart、Widget tree、路由、平台通道与资源
+- 统一中间事实模型：模块、页面、流程、功能点、依赖、资源、测试入口和 unknown
+
+### 9.4 自动迁移执行闭环
+
+最终产品需要在分析之外继续执行：
+
+- 生成或改写 HarmonyOS ArkTS / ETS 代码
+- 持续运行构建、测试和静态检查
+- 根据错误自动修复并回写 `project_memory`
+- 对不能自动完成的能力输出带证据、影响范围和建议方案的 final gap
+- 让用户通过少量确认推动迁移继续，而不是手工重做分析
+
 ## 10. 一句话总结
 
-当前产品的核心不是“让一个模型一次性迁完 App”，而是“让系统围绕固定项目，稳定地产出不漏业务、可持续续跑、可驱动后续实现的迁移 project memory”。
+当前 MVP-1 的核心不是“让一个模型一次性迁完 App”，而是“先让系统围绕固定项目，稳定地产出不漏业务、可持续续跑、可驱动后续实现的迁移 project memory”；最终产品则要演进成可替换源项目、可迁移 Android / iOS / Flutter 到 HarmonyOS 的自动化迁移 agent。
